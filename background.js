@@ -7,10 +7,11 @@ chrome.runtime.onInstalled.addListener(() => {
     chrome.contextMenus.create({ id: "remove_bg_png", title: "✂️ Remove Background", parentId: "pro_image_tools", contexts: ["image"] });
 });
 
-// Hardcoded API Credentials
-const CONFIG = {
-    vpsUrl: "https://png.botbhai.net",
-    securityToken: "my_super_secret_hostinger_token_123!"
+// 🔒 HARDCODED API CREDENTIALS
+// The user never has to type these in. The extension just "magically" works.
+const API_CONFIG = {
+    url: "https://png.botbhai.net",
+    token: "my_super_secret_hostinger_token_123!"
 };
 
 // Listen for clicks
@@ -18,56 +19,62 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     const aiActions = ["upscale_png", "watermark_png", "remove_bg_png"];
 
     if (aiActions.includes(info.menuItemId)) {
-        // 1. Get Settings from Options Page (Only upscale factor is truly dynamic now)
+        // Only fetch the Upscale Factor from the user's settings (Default is 2x)
         chrome.storage.sync.get(['upscaleFactor'], async (settings) => {
+            const scale = settings.upscaleFactor || '2';
 
             try {
-                chrome.notifications.create({ type: 'basic', iconUrl: 'icon16.png', title: 'Processing', message: 'Sending image to your VPS AI... Please wait.' });
+                chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon128.png', title: 'AnyPNG Processing', message: 'Sending image to AI... Please wait.' });
 
-                // 2. Fetch the image from the website
+                // Fetch the image from the website
                 const response = await fetch(info.srcUrl);
                 const imageBlob = await response.blob();
 
-                // 3. Build the payload
+                // Build the payload
                 const formData = new FormData();
                 formData.append('image', imageBlob);
 
-                // 4. Route to the correct API Endpoint & apply the scale setting
+                // Route to the correct API Endpoint
                 let endpoint = "";
                 if (info.menuItemId === "upscale_png") {
                     endpoint = "/upscale";
-                    // Pass the scale from settings (default to 2 if they haven't saved options yet)
-                    formData.append('scale', settings.upscaleFactor || '2');
+                    formData.append('scale', scale);
                 } else if (info.menuItemId === "watermark_png") {
                     endpoint = "/remove-watermark";
                 } else if (info.menuItemId === "remove_bg_png") {
                     endpoint = "/remove-background";
                 }
 
-                // 5. Send to your Coolify Server
-                const apiRes = await fetch(`${CONFIG.vpsUrl}${endpoint}`, {
+                // Send to your Coolify Server using the hardcoded credentials
+                const apiRes = await fetch(`${API_CONFIG.url}${endpoint}`, {
                     method: 'POST',
-                    headers: { 'Authorization': `Bearer ${CONFIG.securityToken}` },
+                    headers: { 'Authorization': `Bearer ${API_CONFIG.token}` },
                     body: formData
                 });
 
                 if (!apiRes.ok) throw new Error(`Server Error: ${apiRes.statusText}`);
 
-                // 6. Download the finished image
+                // Download the finished image
                 const finalBlob = await apiRes.blob();
                 const downloadUrl = URL.createObjectURL(finalBlob);
 
+                // Generate a clean filename based on the action
+                let prefix = "AnyPNG";
+                if (info.menuItemId === "upscale_png") prefix += `_Upscaled_${scale}x`;
+                if (info.menuItemId === "watermark_png") prefix += "_Cleaned";
+                if (info.menuItemId === "remove_bg_png") prefix += "_Transparent";
+
                 chrome.downloads.download({
                     url: downloadUrl,
-                    filename: `AI_Edited_${Date.now()}.png`
+                    filename: `${prefix}_${Date.now()}.png`
                 });
 
             } catch (error) {
-                chrome.notifications.create({ type: 'basic', iconUrl: 'icon16.png', title: 'AI Failed', message: error.message });
+                chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon128.png', title: 'AnyPNG Failed', message: error.message });
             }
         });
     } else if (info.menuItemId === "download_png") {
-        // Standard Local PNG Download logic here (if needed)
+        // Standard Local PNG Download logic
         chrome.downloads.download({ url: info.srcUrl });
     }
 });
