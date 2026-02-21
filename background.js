@@ -13,16 +13,13 @@ const API_CONFIG = {
     token: "my_super_secret_hostinger_token_123!"
 };
 
-// Helper: Convert Blob to Base64 in Service Worker
-async function blobToBase64(blob) {
-    const buffer = await blob.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
-    let binary = '';
-    for (let i = 0; i < bytes.byteLength; i++) {
-        binary += String.fromCharCode(bytes[i]);
-    }
-    return btoa(binary);
-}
+// SAFELY Convert Blob to Data URL (Handles HUGE files without corrupting them!)
+const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+});
 
 // Helper: Setup Offscreen Document for local PNG conversion
 async function setupOffscreenDocument(path) {
@@ -38,18 +35,28 @@ async function setupOffscreenDocument(path) {
     });
 }
 
+// Helper: Show/Hide Loading Screen on the active website
+function toggleLoadingScreen(tabId, show, text = "") {
+    chrome.tabs.sendMessage(tabId, {
+        action: show ? "SHOW_LOADING" : "HIDE_LOADING",
+        text: text
+    }).catch(() => {
+        // Fallback: If website blocks content script, just use standard notification
+        if (show) chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'AnyPNG Processing', message: text });
+    });
+}
+
 // Listen for clicks
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     const aiActions = ["upscale_png", "watermark_png", "remove_bg_png"];
 
-    // NOTE: Added iconUrl: 'icons/icon48.png' back in because Chrome requires it!
     if (aiActions.includes(info.menuItemId)) {
         // --- AI VPS PROCESSING LOGIC ---
         chrome.storage.sync.get(['upscaleFactor'], async (settings) => {
             const scale = settings.upscaleFactor || '2';
 
             try {
-                chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'AnyPNG Processing', message: 'Sending image to AI... Please wait.' });
+                toggleLoadingScreen(tab.id, true, "Running AI model on your server...");
 
                 const response = await fetch(info.srcUrl);
                 const imageBlob = await response.blob();
@@ -75,10 +82,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
                 if (!apiRes.ok) throw new Error(`Server Error: ${apiRes.statusText}`);
 
-                // FIXED: Convert blob to base64 Data URI instead of using createObjectURL
+                // Generate safe Base64 string from the massive AI image
                 const finalBlob = await apiRes.blob();
-                const base64Data = await blobToBase64(finalBlob);
-                const downloadUrl = `data:image/png;base64,${base64Data}`;
+                const downloadUrl = await blobToDataUrl(finalBlob);
 
                 let prefix = "AnyPNG";
                 if (info.menuItemId === "upscale_png") prefix += `_Upscaled_${scale}x`;
@@ -92,18 +98,22 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
             } catch (error) {
                 chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'AnyPNG Failed', message: error.message });
+            } finally {
+                toggleLoadingScreen(tab.id, false); // Always hide loader
             }
         });
     } else if (info.menuItemId === "download_png") {
         // --- LOCAL PNG CONVERSION LOGIC (JPEG/WEBP -> PNG) ---
         try {
-            chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'AnyPNG', message: 'Converting image to PNG...' });
+            toggleLoadingScreen(tab.id, true, "Converting image to PNG locally...");
 
             const response = await fetch(info.srcUrl);
             const blob = await response.blob();
             const mimeType = blob.type;
 
-            const base64Data = await blobToBase64(blob);
+            // Strip the metadata from DataURL to send clean Base64 to offscreen
+            const fullDataUrl = await blobToDataUrl(blob);
+            const base64Data = fullDataUrl.split(',')[1];
 
             await setupOffscreenDocument('offscreen.html');
 
@@ -116,7 +126,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
             if (result.error) throw new Error(result.error);
 
-            // FIXED: Download directly using the base64 string from offscreen.js
             const downloadUrl = `data:image/png;base64,${result.data}`;
 
             chrome.downloads.download({
@@ -126,7 +135,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
         } catch (error) {
             console.error("Local Conversion Error:", error);
-            chrome.notifications.create({ type: 'basic', title: 'Conversion Failed', message: error.message || 'Could not convert image.' });
+            chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Conversion Failed', message: error.message || 'Could not convert image.' });
+        } finally {
+            toggleLoadingScreen(tab.id, false); // Always hide loader
         }
     }
 });
