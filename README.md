@@ -17,15 +17,15 @@
 
 ## 🛠️ Installation
 
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/tanviralamtusar/AnyPNG.git
-   ```
-2. **Open Chrome Extensions**:
+1. **Download the latest release**:
+   Go to the [Releases](https://github.com/tanviralamtusar/AnyPNG/releases) page and download the `AnyPNG.V1.0.zip` file.
+2. **Extract the file**:
+   Extract the downloaded zip file to a folder on your computer.
+3. **Open Chrome Extensions**:
    Navigate to `chrome://extensions/` in your browser.
-3. **Load Unpacked**:
-   Enable "Developer mode" in the top right, then click "Load unpacked" and select the `anypng` folder.
-4. **Configure**:
+4. **Load Unpacked**:
+   Enable "Developer mode" in the top right, then click "Load unpacked" and select the extracted `anypng` folder.
+5. **Configure**:
    Right-click the AnyPNG icon in your toolbar, select **Options**, and set your default Upscale Engine.
 
 ## ⚙️ Backend Configuration
