@@ -72,6 +72,34 @@ async function showDashboard(session) {
     document.getElementById('dashboard-view').classList.remove('hidden');
     document.getElementById('error-msg').innerText = "";
     
+    // Check settings for advanced prompt
+    chrome.storage.sync.get(['enableAdvancedPrompt'], (result) => {
+        if (result.enableAdvancedPrompt) {
+            document.getElementById('advanced-prompt-container').classList.remove('hidden');
+        } else {
+            document.getElementById('advanced-prompt-container').classList.add('hidden');
+        }
+    });
+
+    // Check if there's a result image in storage
+    chrome.storage.local.get(['lastWatermarkResult', 'watermarkProcessing'], (data) => {
+        if (data.watermarkProcessing) {
+            document.getElementById('popup-placeholder').classList.add('hidden');
+            document.getElementById('popup-result-img').style.display = "none";
+            document.getElementById('popup-spinner').classList.remove('hidden');
+            document.getElementById('popup-spinner').innerText = "Processing...";
+            document.getElementById('popup-retry').disabled = true;
+            document.getElementById('popup-download').disabled = true;
+        } else if (data.lastWatermarkResult) {
+            document.getElementById('popup-placeholder').classList.add('hidden');
+            document.getElementById('popup-result-img').src = data.lastWatermarkResult;
+            document.getElementById('popup-result-img').style.display = "block";
+            document.getElementById('popup-spinner').classList.add('hidden');
+            document.getElementById('popup-retry').disabled = false;
+            document.getElementById('popup-download').disabled = false;
+        }
+    });
+
     try {
         // Fetch credits from profiles table
         const res = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${session.user.id}&select=credits`, {
@@ -103,3 +131,46 @@ async function showDashboard(session) {
         console.error(err);
     }
 }
+
+// Popup Watermark Handlers
+document.getElementById('popup-retry').onclick = async () => {
+    const prompt = document.getElementById('popup-prompt').value;
+    document.getElementById('popup-result-img').style.display = "none";
+    document.getElementById('popup-spinner').classList.remove('hidden');
+    document.getElementById('popup-spinner').innerText = "Processing...";
+    document.getElementById('popup-retry').disabled = true;
+    document.getElementById('popup-download').disabled = true;
+    
+    await chrome.storage.local.set({ watermarkProcessing: true });
+    chrome.runtime.sendMessage({ action: "RETRY_WATERMARK", prompt: prompt });
+};
+
+document.getElementById('popup-download').onclick = () => {
+    const imgUrl = document.getElementById('popup-result-img').src;
+    chrome.downloads.download({ url: imgUrl, filename: `AnyPNG_Cleaned_${Date.now()}.png` });
+};
+
+// Listen for updates from background
+chrome.runtime.onMessage.addListener((message) => {
+    if (message.action === "UPDATE_PREVIEW") {
+        document.getElementById('popup-spinner').classList.add('hidden');
+        document.getElementById('popup-result-img').src = message.image;
+        document.getElementById('popup-result-img').style.display = "block";
+        document.getElementById('popup-retry').disabled = false;
+        document.getElementById('popup-download').disabled = false;
+        document.getElementById('popup-placeholder').classList.add('hidden');
+    } else if (message.action === "SHOW_ERROR") {
+        document.getElementById('popup-spinner').innerText = message.error;
+        document.getElementById('popup-spinner').style.color = "#ef4444";
+        document.getElementById('popup-spinner').classList.remove('hidden');
+        document.getElementById('popup-result-img').style.display = "none";
+        document.getElementById('popup-retry').disabled = false;
+    } else if (message.action === "PROCESSING_WATERMARK") {
+        document.getElementById('popup-placeholder').classList.add('hidden');
+        document.getElementById('popup-result-img').style.display = "none";
+        document.getElementById('popup-spinner').classList.remove('hidden');
+        document.getElementById('popup-spinner').innerText = "Processing...";
+        document.getElementById('popup-retry').disabled = true;
+        document.getElementById('popup-download').disabled = true;
+    }
+});

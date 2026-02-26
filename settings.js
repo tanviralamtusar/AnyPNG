@@ -1,8 +1,11 @@
 // Load saved settings when the options page opens
 document.addEventListener('DOMContentLoaded', () => {
-    chrome.storage.sync.get(['upscaleFactor'], (result) => {
+    chrome.storage.sync.get(['upscaleFactor', 'enableAdvancedPrompt'], (result) => {
         if (result.upscaleFactor) {
             document.getElementById('upscaleFactor').value = result.upscaleFactor;
+        }
+        if (result.enableAdvancedPrompt !== undefined) {
+            document.getElementById('enableAdvancedPrompt').checked = result.enableAdvancedPrompt;
         }
     });
 });
@@ -59,8 +62,9 @@ document.getElementById('testBtn').addEventListener('click', async () => {
 // Save settings when the button is clicked
 document.getElementById('saveBtn').addEventListener('click', () => {
     const upscaleFactor = document.getElementById('upscaleFactor').value;
+    const enableAdvancedPrompt = document.getElementById('enableAdvancedPrompt').checked;
 
-    chrome.storage.sync.set({ upscaleFactor }, () => {
+    chrome.storage.sync.set({ upscaleFactor, enableAdvancedPrompt }, () => {
         const status = document.getElementById('status');
         status.classList.add('show');
 

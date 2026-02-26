@@ -51,12 +51,27 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         }
 
         currentTabId = tab.id;
-        chrome.tabs.sendMessage(currentTabId, { action: "SHOW_PRO_EDITOR" });
+        
+        // Notify user that processing started
+        chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'AnyPNG Processing', message: 'Removing watermark... Please wait.' });
+        await chrome.storage.local.set({ watermarkProcessing: true });
+        chrome.runtime.sendMessage({ action: "PROCESSING_WATERMARK" }).catch(() => {});
 
-        const response = await fetch(info.srcUrl);
-        cachedImageBlob = await response.blob();
+        // Try to open the popup automatically
+        if (chrome.action && chrome.action.openPopup) {
+            chrome.action.openPopup().catch(() => {});
+        }
 
-        await callWatermarkBackend(DEFAULT_PROMPT, supabaseSession.access_token);
+        try {
+            const response = await fetch(info.srcUrl);
+            cachedImageBlob = await response.blob();
+            const base64Original = await blobToDataUrl(cachedImageBlob);
+            await chrome.storage.local.set({ lastOriginalImage: base64Original });
+            
+            await callWatermarkBackend(DEFAULT_PROMPT, supabaseSession.access_token);
+        } catch (e) {
+            chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Error', message: "Failed to fetch image: " + e.message });
+        }
     } 
     
     // ==========================================
@@ -128,8 +143,22 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
 // Helper Function specifically for the Watermark API
 async function callWatermarkBackend(prompt, token) {
+    let blobToProcess = cachedImageBlob;
+    
+    // If service worker restarted, try to load from storage
+    if (!blobToProcess) {
+        const { lastOriginalImage } = await chrome.storage.local.get('lastOriginalImage');
+        if (lastOriginalImage) {
+            const res = await fetch(lastOriginalImage);
+            blobToProcess = await res.blob();
+        } else {
+            chrome.runtime.sendMessage({ action: "SHOW_ERROR", error: "Original image lost. Please right-click and try again." }).catch(() => {});
+            return;
+        }
+    }
+
     const formData = new FormData();
-    formData.append('image', cachedImageBlob);
+    formData.append('image', blobToProcess);
     formData.append('prompt', prompt);
 
     try {
@@ -147,10 +176,20 @@ async function callWatermarkBackend(prompt, token) {
         const finalBlob = await apiRes.blob();
         const base64Data = await blobToDataUrl(finalBlob);
         
-        chrome.tabs.sendMessage(currentTabId, { action: "UPDATE_PREVIEW", image: base64Data });
+        // Save to storage for the popup to read
+        await chrome.storage.local.set({ lastWatermarkResult: base64Data, watermarkProcessing: false });
+
+        // Notify popup if it's open
+        chrome.runtime.sendMessage({ action: "UPDATE_PREVIEW", image: base64Data }).catch(() => {
+            // If popup is closed, just show a notification
+            chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Watermark Removed!', message: 'Click the AnyPNG icon to view the result.' });
+        });
 
     } catch (error) {
-        chrome.tabs.sendMessage(currentTabId, { action: "SHOW_ERROR", error: error.message });
+        await chrome.storage.local.set({ watermarkProcessing: false });
+        chrome.runtime.sendMessage({ action: "SHOW_ERROR", error: error.message }).catch(() => {
+            chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Error', message: error.message });
+        });
     }
 }
 
