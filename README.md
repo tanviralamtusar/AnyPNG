@@ -13,7 +13,7 @@
 - **Loading Overlay**: A beautiful glass-morphism loading screen appears during AI processing to keep you informed.
 - **API Connection Tester**: Easily verify your server connection directly from the settings page.
 - **Modern UI**: A premium, glassmorphism-inspired settings page for easy configuration.
-- **Self-Hosted Privacy**: Routes all AI requests to your own VPS/Coolify instance, ensuring your data stays private and your costs stay low.
+- **Self-Hosted Privacy**: Routes all AI requests to our own VPS instance, ensuring data stays private and costs stay low.
 
 ## 🛠️ Installation
 
@@ -27,15 +27,7 @@
    Enable "Developer mode" in the top right, then click "Load unpacked" and select the extracted `anypng` folder.
 5. **Configure**:
    Right-click the AnyPNG icon in your toolbar, select **Options**, and set your default Upscale Engine.
-
-## ⚙️ Backend Configuration
-
-The extension is designed to work with a self-hosted API. By default, it is configured to connect to:
-- **API URL**: `https://png.botbhai.net`
-- **Endpoints**: `/upscale`, `/remove-watermark`, `/remove-background`
-
-To change these, update the `CONFIG` object in `background.js`.
-
+   
 ---
 
 *Built with ❤️ for professional image workflows.*
