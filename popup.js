@@ -86,8 +86,7 @@ async function showDashboard(session) {
         if (data.watermarkProcessing) {
             document.getElementById('popup-placeholder').classList.add('hidden');
             document.getElementById('popup-result-img').style.display = "none";
-            document.getElementById('popup-spinner').classList.remove('hidden');
-            document.getElementById('popup-spinner').innerText = "Processing...";
+            document.getElementById('processing-container').classList.remove('hidden');
             document.getElementById('popup-retry').disabled = true;
             document.getElementById('popup-download').disabled = true;
         } else if (data.lastWatermarkResult) {
@@ -136,8 +135,7 @@ async function showDashboard(session) {
 document.getElementById('popup-retry').onclick = async () => {
     const prompt = document.getElementById('popup-prompt').value;
     document.getElementById('popup-result-img').style.display = "none";
-    document.getElementById('popup-spinner').classList.remove('hidden');
-    document.getElementById('popup-spinner').innerText = "Processing...";
+    document.getElementById('processing-container').classList.remove('hidden');
     document.getElementById('popup-retry').disabled = true;
     document.getElementById('popup-download').disabled = true;
     
@@ -150,26 +148,32 @@ document.getElementById('popup-download').onclick = () => {
     chrome.downloads.download({ url: imgUrl, filename: `AnyPNG_Cleaned_${Date.now()}.png` });
 };
 
+document.getElementById('popup-cancel').onclick = async () => {
+    await chrome.storage.local.remove(['watermarkProcessing', 'lastOriginalImage']);
+    document.getElementById('processing-container').classList.add('hidden');
+    document.getElementById('popup-placeholder').classList.remove('hidden');
+    document.getElementById('popup-retry').disabled = true;
+    document.getElementById('popup-download').disabled = true;
+    chrome.runtime.sendMessage({ action: "CANCEL_WATERMARK" });
+};
+
 // Listen for updates from background
 chrome.runtime.onMessage.addListener((message) => {
     if (message.action === "UPDATE_PREVIEW") {
-        document.getElementById('popup-spinner').classList.add('hidden');
+        document.getElementById('processing-container').classList.add('hidden');
         document.getElementById('popup-result-img').src = message.image;
         document.getElementById('popup-result-img').style.display = "block";
         document.getElementById('popup-retry').disabled = false;
         document.getElementById('popup-download').disabled = false;
         document.getElementById('popup-placeholder').classList.add('hidden');
     } else if (message.action === "SHOW_ERROR") {
-        document.getElementById('popup-spinner').innerText = message.error;
-        document.getElementById('popup-spinner').style.color = "#ef4444";
-        document.getElementById('popup-spinner').classList.remove('hidden');
+        document.getElementById('processing-container').classList.add('hidden');
         document.getElementById('popup-result-img').style.display = "none";
         document.getElementById('popup-retry').disabled = false;
     } else if (message.action === "PROCESSING_WATERMARK") {
         document.getElementById('popup-placeholder').classList.add('hidden');
         document.getElementById('popup-result-img').style.display = "none";
-        document.getElementById('popup-spinner').classList.remove('hidden');
-        document.getElementById('popup-spinner').innerText = "Processing...";
+        document.getElementById('processing-container').classList.remove('hidden');
         document.getElementById('popup-retry').disabled = true;
         document.getElementById('popup-download').disabled = true;
     }
