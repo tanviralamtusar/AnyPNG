@@ -13,7 +13,7 @@
 - **Loading Overlay**: A beautiful glass-morphism loading screen appears during AI processing to keep you informed.
 - **API Connection Tester**: Easily verify your server connection directly from the settings page.
 - **Modern UI**: A premium, glassmorphism-inspired settings page for easy configuration.
-- **Self-Hosted Privacy**: Routes all AI requests to your own VPS/Coolify instance, ensuring your data stays private and your costs stay low.
+- **Self-Hosted Privacy**: Routes all AI requests to our own VPS instance, ensuring data stays private and costs stay low.
 
 ## 🛠️ Installation
 
