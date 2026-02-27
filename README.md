@@ -27,15 +27,7 @@
    Enable "Developer mode" in the top right, then click "Load unpacked" and select the extracted `anypng` folder.
 5. **Configure**:
    Right-click the AnyPNG icon in your toolbar, select **Options**, and set your default Upscale Engine.
-
-## ⚙️ Backend Configuration
-
-The extension is designed to work with a self-hosted API. By default, it is configured to connect to:
-- **API URL**: `https://png.botbhai.net`
-- **Endpoints**: `/upscale`, `/remove-watermark`, `/remove-background`
-
-To change these, update the `CONFIG` object in `background.js`.
-
+   
 ---
 
 *Built with ❤️ for professional image workflows.*
