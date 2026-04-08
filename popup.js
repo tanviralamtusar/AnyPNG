@@ -247,6 +247,7 @@ chrome.runtime.onMessage.addListener((message) => {
         document.getElementById('processing-container').classList.add('hidden');
         document.getElementById('popup-result-img').style.display = "none";
         document.getElementById('popup-retry').disabled = false;
+        document.getElementById('error-msg').innerText = message.error || "An error occurred";
     } else if (message.action === "PROCESSING_WATERMARK") {
         document.getElementById('popup-placeholder').classList.add('hidden');
         document.getElementById('popup-result-img').style.display = "none";

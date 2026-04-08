@@ -219,10 +219,18 @@ async function callWatermarkBackend(prompt, token) {
     } catch (error) {
         await chrome.storage.local.set({ watermarkProcessing: false });
         
-        let userMessage = error.message;
-        if (userMessage.includes("does not support image input")) {
+        let userMessage = error.message || "Unknown error";
+        const lowerMsg = userMessage.toLowerCase();
+        
+        // Check for model/image input errors
+        if (lowerMsg.includes("does not support image") || 
+            lowerMsg.includes("cannot read image") || 
+            lowerMsg.includes("image input") ||
+            lowerMsg.includes("model") && lowerMsg.includes("image")) {
             userMessage = "This AI service is currently unavailable. Please try again later or contact support.";
         }
+        
+        console.error("Watermark API Error:", error);
         
         chrome.runtime.sendMessage({ action: "SHOW_ERROR", error: userMessage }).catch(() => {
             chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Error', message: userMessage });
