@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>User Profile | AnyPNG Pro</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "inverse-primary": "#2949ef",
+              "on-secondary-container": "#e3ffe4",
+              "error-container": "#a70138",
+              "surface-tint": "#9ba8ff",
+              "primary": "#9ba8ff",
+              "on-error-container": "#ffb2b9",
+              "on-surface-variant": "#adaaaa",
+              "primary-dim": "#4963ff",
+              "surface-container": "#1a1a1a",
+              "surface-container-low": "#131313",
+              "outline": "#767575",
+              "outline-variant": "#484847",
+              "on-surface": "#ffffff",
+              "secondary-dim": "#24f07e",
+              "primary-fixed-dim": "#778aff",
+              "surface": "#0e0e0e",
+              "on-error": "#490013",
+              "inverse-surface": "#fcf9f8",
+              "tertiary": "#c180ff",
+              "on-primary-fixed-variant": "#001a88",
+              "secondary": "#3fff8b",
+              "on-tertiary-fixed": "#270048",
+              "on-tertiary-fixed-variant": "#560094",
+              "background": "#0e0e0e",
+              "surface-container-highest": "#262626",
+              "inverse-on-surface": "#565555",
+              "tertiary-fixed-dim": "#c488ff",
+              "primary-fixed": "#8999ff",
+              "on-secondary-fixed-variant": "#006832",
+              "tertiary-fixed": "#ce9bff",
+              "secondary-fixed": "#3fff8b",
+              "surface-container-high": "#20201f",
+              "surface-variant": "#262626",
+              "secondary-fixed-dim": "#24f07e",
+              "surface-bright": "#2c2c2c",
+              "tertiary-container": "#af5cfe",
+              "on-secondary-fixed": "#004820",
+              "surface-dim": "#0e0e0e",
+              "on-tertiary": "#33005b",
+              "secondary-container": "#006d35",
+              "on-secondary": "#005d2c",
+              "error-dim": "#d73357",
+              "on-primary": "#001c8e",
+              "error": "#ff6e84",
+              "on-primary-container": "#001470",
+              "surface-container-lowest": "#000000",
+              "on-background": "#ffffff",
+              "primary-container": "#8999ff",
+              "on-tertiary-container": "#000000",
+              "on-primary-fixed": "#000000",
+              "tertiary-dim": "#9c48ea"
+            },
+            fontFamily: {
+              "headline": ["Manrope"],
+              "body": ["Manrope"],
+              "label": ["Manrope"]
+            },
+            borderRadius: {"DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px"},
+          },
+        },
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .glass-panel {
+            background: rgba(38, 38, 38, 0.6);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+        }
+        .signature-glow {
+            background: linear-gradient(135deg, #9ba8ff 0%, #c180ff 100%);
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-surface font-body selection:bg-primary/30 min-h-screen pb-32">
+<!-- TopAppBar Shell -->
+<header class="fixed top-0 z-50 w-full bg-[#0e0e0e]/80 backdrop-blur-[20px] shadow-[0_20px_40px_0_rgba(255,255,255,0.04)] h-16 flex justify-between items-center px-6">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-primary" style="font-variation-settings: 'FILL' 1;">auto_awesome</span>
+<h1 class="font-manrope font-black text-xl tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-[#9ba8ff] to-[#c180ff]">AnyPNG Pro</h1>
+</div>
+<div class="flex items-center gap-4">
+<button class="hover:bg-surface-container-highest transition-colors p-2 rounded-full active:scale-95 duration-200 ease-out">
+<span class="material-symbols-outlined text-on-surface">settings</span>
+</button>
+</div>
+</header>
+<main class="pt-24 px-6 max-w-4xl mx-auto space-y-10">
+<!-- Profile Hero Section -->
+<section class="relative">
+<div class="flex flex-col md:flex-row items-center md:items-end gap-6">
+<div class="relative group">
+<div class="absolute -inset-1 signature-glow rounded-full blur opacity-25 group-hover:opacity-50 transition duration-500"></div>
+<img alt="Alex Rivera" class="relative w-32 h-32 rounded-full object-cover border-4 border-surface-container-low shadow-xl" data-alt="Portrait of a young man smiling softly" src="https://lh3.googleusercontent.com/aida-public/AB6AXuC-0OshNbf6SPJZGgOAfGUMBamILcc-3xcMgt06g9IpvenMByjqew6AhW7TIsNCzEV7eUBM9N1NcVGCbpZ5go7LJo3MY1kOYlGcTUFTLohv0tIc3WMYcPRAWe6QjqBrG24aU-Z4-p09RPcyN2klKpHlPhlCU_65VcPC_QPaKc2qpCx1JKXeoUrxnVDPXESiNArry-lfEfvVn0T2GsHWS-7IkVaGzN40hFxexVvtEcFLsnNPEVz8JVABewM55F8Q3LoAj0F2Y0d0jy0"/>
+<button class="absolute bottom-1 right-1 bg-primary text-on-primary-fixed p-1.5 rounded-full shadow-lg active:scale-90 transition-transform">
+<span class="material-symbols-outlined text-sm">edit</span>
+</button>
+</div>
+<div class="text-center md:text-left flex-1">
+<h2 class="text-4xl font-extrabold tracking-tight text-on-surface">Alex Rivera</h2>
+<div class="flex items-center justify-center md:justify-start gap-2 mt-1">
+<span class="text-secondary font-bold text-sm uppercase tracking-widest">Pro Member</span>
+<span class="w-1.5 h-1.5 rounded-full bg-outline-variant"></span>
+<span class="text-on-surface-variant text-sm">Joined June 2023</span>
+</div>
+</div>
+<button class="w-full md:w-auto px-8 py-3 rounded-xl signature-glow text-on-primary-fixed font-bold shadow-[0_10px_20px_-5px_rgba(155,168,255,0.4)] active:scale-95 transition-all">
+                    Upgrade Plan
+                </button>
+</div>
+</section>
+<!-- Bento Grid: Statistics & Quick Info -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+<!-- Glass Credit Module -->
+<div class="md:col-span-2 glass-panel p-8 rounded-xl border border-outline-variant/15 flex flex-col justify-between min-h-[220px]">
+<div class="flex justify-between items-start">
+<span class="text-on-surface-variant font-medium tracking-wide uppercase text-xs">Usage Statistics</span>
+<button class="text-primary active:rotate-180 transition-transform duration-500">
+<span class="material-symbols-outlined">sync</span>
+</button>
+</div>
+<div class="mt-4">
+<div class="flex items-baseline gap-2">
+<span class="text-6xl font-black text-on-surface tracking-tighter">842</span>
+<span class="text-on-surface-variant text-lg">/ 1,000</span>
+</div>
+<p class="text-on-surface-variant text-sm mt-1">Credits used this month</p>
+</div>
+<div class="mt-6 w-full h-2 bg-surface-container-highest rounded-full overflow-hidden">
+<div class="h-full signature-glow rounded-full" style="width: 84%;"></div>
+</div>
+</div>
+<!-- Tier Card -->
+<div class="bg-surface-container p-6 rounded-xl border border-outline-variant/10 flex flex-col justify-center items-center text-center">
+<div class="w-16 h-16 rounded-2xl bg-tertiary/10 flex items-center justify-center mb-4">
+<span class="material-symbols-outlined text-tertiary text-3xl" style="font-variation-settings: 'FILL' 1;">workspace_premium</span>
+</div>
+<h3 class="text-lg font-bold text-on-surface">Billing Cycle</h3>
+<p class="text-on-surface-variant text-sm mt-1">Next payment: July 12</p>
+<button class="mt-4 text-primary text-sm font-bold hover:underline">Manage Billing</button>
+</div>
+</div>
+<!-- Settings & Support Sections -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-10">
+<!-- Account Settings -->
+<section class="space-y-6">
+<h3 class="text-xl font-bold text-on-surface border-l-4 border-primary pl-4">Account Settings</h3>
+<div class="space-y-4">
+<div class="group cursor-pointer">
+<div class="flex justify-between items-center p-4 rounded-xl bg-surface-container-low hover:bg-surface-container transition-colors">
+<div>
+<p class="text-xs text-on-surface-variant uppercase tracking-widest font-bold">Email Address</p>
+<p class="text-on-surface font-medium">alex.rivera@design.co</p>
+</div>
+<span class="material-symbols-outlined text-on-surface-variant group-hover:text-primary transition-colors">chevron_right</span>
+</div>
+</div>
+<div class="group cursor-pointer">
+<div class="flex justify-between items-center p-4 rounded-xl bg-surface-container-low hover:bg-surface-container transition-colors">
+<div>
+<p class="text-xs text-on-surface-variant uppercase tracking-widest font-bold">Password</p>
+<p class="text-on-surface font-medium">••••••••••••</p>
+</div>
+<span class="material-symbols-outlined text-on-surface-variant group-hover:text-primary transition-colors">chevron_right</span>
+</div>
+</div>
+<div class="group cursor-pointer">
+<div class="flex justify-between items-center p-4 rounded-xl bg-surface-container-low hover:bg-surface-container transition-colors">
+<div>
+<p class="text-xs text-on-surface-variant uppercase tracking-widest font-bold">Two-Factor Auth</p>
+<p class="text-secondary font-medium">Enabled</p>
+</div>
+<span class="material-symbols-outlined text-on-surface-variant group-hover:text-primary transition-colors">chevron_right</span>
+</div>
+</div>
+</div>
+</section>
+<!-- Support & Preferences -->
+<section class="space-y-6">
+<h3 class="text-xl font-bold text-on-surface border-l-4 border-tertiary pl-4">Support</h3>
+<div class="grid grid-cols-1 gap-4">
+<div class="flex items-center gap-4 p-4 rounded-xl bg-surface-container-low hover:bg-surface-container-high transition-all cursor-pointer">
+<div class="w-10 h-10 rounded-lg bg-surface-container-highest flex items-center justify-center">
+<span class="material-symbols-outlined text-on-surface-variant">help_center</span>
+</div>
+<div class="flex-1">
+<p class="text-on-surface font-bold">Help Center</p>
+<p class="text-xs text-on-surface-variant">Guides and FAQs</p>
+</div>
+</div>
+<div class="flex items-center gap-4 p-4 rounded-xl bg-surface-container-low hover:bg-surface-container-high transition-all cursor-pointer">
+<div class="w-10 h-10 rounded-lg bg-surface-container-highest flex items-center justify-center">
+<span class="material-symbols-outlined text-on-surface-variant">chat_bubble</span>
+</div>
+<div class="flex-1">
+<p class="text-on-surface font-bold">Live Support</p>
+<p class="text-xs text-on-surface-variant">Chat with our team</p>
+</div>
+</div>
+<div class="flex items-center gap-4 p-4 rounded-xl bg-surface-container-low hover:bg-surface-container-high transition-all cursor-pointer">
+<div class="w-10 h-10 rounded-lg bg-surface-container-highest flex items-center justify-center">
+<span class="material-symbols-outlined text-on-surface-variant">policy</span>
+</div>
+<div class="flex-1">
+<p class="text-on-surface font-bold">Privacy Policy</p>
+<p class="text-xs text-on-surface-variant">How we handle data</p>
+</div>
+</div>
+</div>
+</section>
+</div>
+<!-- Logout Section -->
+<div class="pt-8 border-t border-outline-variant/10 flex flex-col items-center">
+<button class="flex items-center gap-2 px-10 py-4 rounded-xl bg-surface-container-highest text-error font-bold hover:bg-error/10 active:scale-95 transition-all">
+<span class="material-symbols-outlined">logout</span>
+                Logout from AnyPNG Pro
+            </button>
+<p class="mt-4 text-on-surface-variant text-[10px] uppercase tracking-[0.2em]">App Version 2.4.0-pro</p>
+</div>
+</main>
+<!-- BottomNavBar Shell -->
+<nav class="fixed bottom-0 left-0 w-full z-50 bg-[#1a1a1a]/70 backdrop-blur-[20px] shadow-[0_-10px_30px_0_rgba(0,0,0,0.5)] rounded-t-[24px] flex justify-around items-center px-4 pb-6 pt-3">
+<a class="flex flex-col items-center justify-center text-[#adaaaa] hover:text-white transition-all active:scale-90 duration-200" href="#">
+<span class="material-symbols-outlined">home</span>
+<span class="font-manrope text-[10px] font-medium uppercase tracking-widest mt-1">Home</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#adaaaa] hover:text-white transition-all active:scale-90 duration-200" href="#">
+<span class="material-symbols-outlined">sync</span>
+<span class="font-manrope text-[10px] font-medium uppercase tracking-widest mt-1">Processing</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#adaaaa] hover:text-white transition-all active:scale-90 duration-200" href="#">
+<span class="material-symbols-outlined">history</span>
+<span class="font-manrope text-[10px] font-medium uppercase tracking-widest mt-1">History</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#9ba8ff] relative after:content-[''] after:absolute after:-bottom-1 after:w-1 after:h-1 after:bg-[#9ba8ff] after:rounded-full active:scale-90 duration-200" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">person</span>
+<span class="font-manrope text-[10px] font-medium uppercase tracking-widest mt-1">Profile</span>
+</a>
+</nav>
+</body></html>

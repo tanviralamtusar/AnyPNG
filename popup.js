@@ -3,13 +3,41 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
 let isLoginMode = true;
 
-document.addEventListener('DOMContentLoaded', async () => {
+async function refreshSessionIfNeeded() {
     const { supabaseSession } = await chrome.storage.local.get('supabaseSession');
-    if (supabaseSession) {
-        showDashboard(supabaseSession);
+    if (!supabaseSession) return null;
+    
+    if (supabaseSession.refresh_token) {
+        try {
+            const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY },
+                body: JSON.stringify({ refresh_token: supabaseSession.refresh_token })
+            });
+            
+            if (res.ok) {
+                const newSession = await res.json();
+                const updatedSession = { ...supabaseSession, ...newSession };
+                await chrome.storage.local.set({ supabaseSession: updatedSession });
+                return updatedSession;
+            }
+        } catch (e) {
+            console.log('Session refresh failed, clearing session');
+            await chrome.storage.local.remove('supabaseSession');
+            return null;
+        }
+    }
+    return supabaseSession;
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+    const session = await refreshSessionIfNeeded();
+    if (session) {
+        showDashboard(session);
     } else {
         document.getElementById('auth-view').classList.remove('hidden');
     }
+    loadTheme();
 });
 
 document.getElementById('settings-btn').onclick = () => {
@@ -47,7 +75,25 @@ document.getElementById('login-btn').onclick = async () => {
 document.getElementById('logout-btn').onclick = async () => {
     await chrome.storage.local.remove('supabaseSession');
     document.getElementById('dashboard-view').classList.add('hidden');
+    document.getElementById('profile-view').classList.add('hidden');
     document.getElementById('auth-view').classList.remove('hidden');
+};
+
+// --- Navigation Logics ---
+document.getElementById('nav-home-btn').onclick = () => {
+    document.getElementById('nav-home-btn').classList.add('active');
+    document.getElementById('nav-profile-btn').classList.remove('active');
+    
+    document.getElementById('dashboard-view').classList.remove('hidden');
+    document.getElementById('profile-view').classList.add('hidden');
+};
+
+document.getElementById('nav-profile-btn').onclick = () => {
+    document.getElementById('nav-profile-btn').classList.add('active');
+    document.getElementById('nav-home-btn').classList.remove('active');
+
+    document.getElementById('dashboard-view').classList.add('hidden');
+    document.getElementById('profile-view').classList.remove('hidden');
 };
 
 document.getElementById('buy-btn').onclick = () => {
@@ -120,6 +166,9 @@ async function showDashboard(session) {
         const data = await res.json();
         if (data && data.length > 0) {
             document.getElementById('credit-count').innerText = data[0].credits;
+            document.getElementById('profile-credits-used').innerText = Math.max(0, 100 - data[0].credits); // Assuming 100 max for demo
+            document.getElementById('profile-credits-total').innerText = "/ 100";
+            document.getElementById('profile-progress').style.width = `${Math.max(0, 100 - data[0].credits)}%`;
         } else {
             document.getElementById('credit-count').innerText = "0";
             console.warn("No profile found for user", session.user.id);
@@ -129,13 +178,47 @@ async function showDashboard(session) {
         document.getElementById('error-msg').innerText = "Failed to load credits: " + err.message;
         console.error(err);
     }
+    
+    // Fill out Profile Basic info
+    document.getElementById('profile-email').innerText = session.user.email;
+    const nameStr = session.user.email.split('@')[0];
+    document.getElementById('profile-name').innerText = nameStr.charAt(0).toUpperCase() + nameStr.slice(1);
+    document.getElementById('profile-fullname').innerText = session.user.user_metadata?.full_name || nameStr.charAt(0).toUpperCase() + nameStr.slice(1);
 }
+
+// Theme Toggle
+document.getElementById('theme-toggle').addEventListener('change', async (e) => {
+    const isLight = e.target.checked;
+    if (isLight) {
+        document.body.classList.add('light-theme');
+        document.querySelector('.theme-label').innerText = 'Light';
+    } else {
+        document.body.classList.remove('light-theme');
+        document.querySelector('.theme-label').innerText = 'Dark';
+    }
+    await chrome.storage.local.set({ theme: isLight ? 'light' : 'dark' });
+});
+
+async function loadTheme() {
+    const { theme } = await chrome.storage.local.get('theme');
+    if (theme === 'light') {
+        document.body.classList.add('light-theme');
+        document.getElementById('theme-toggle').checked = true;
+        document.querySelector('.theme-label').innerText = 'Light';
+    }
+}
+
+// Load theme on init
+loadTheme();
 
 // Popup Watermark Handlers
 document.getElementById('popup-retry').onclick = async () => {
     const prompt = document.getElementById('popup-prompt').value;
     document.getElementById('popup-result-img').style.display = "none";
     document.getElementById('processing-container').classList.remove('hidden');
+    document.querySelector('.progress-percentage').innerText = "0%";
+    document.querySelector('.progress-ring-fill').style.strokeDashoffset = "339.292";
+    document.querySelector('.processing-status-text').innerText = "Starting...";
     document.getElementById('popup-retry').disabled = true;
     document.getElementById('popup-download').disabled = true;
     
@@ -174,6 +257,9 @@ chrome.runtime.onMessage.addListener((message) => {
         document.getElementById('popup-placeholder').classList.add('hidden');
         document.getElementById('popup-result-img').style.display = "none";
         document.getElementById('processing-container').classList.remove('hidden');
+        document.querySelector('.progress-percentage').innerText = "0%";
+        document.querySelector('.progress-ring-fill').style.strokeDashoffset = "339.292";
+        document.querySelector('.processing-status-text').innerText = "Starting...";
         document.getElementById('popup-retry').disabled = true;
         document.getElementById('popup-download').disabled = true;
     }
