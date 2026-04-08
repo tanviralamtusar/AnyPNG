@@ -75,25 +75,19 @@ document.getElementById('login-btn').onclick = async () => {
 document.getElementById('logout-btn').onclick = async () => {
     await chrome.storage.local.remove('supabaseSession');
     document.getElementById('dashboard-view').classList.add('hidden');
-    document.getElementById('profile-view').classList.add('hidden');
     document.getElementById('auth-view').classList.remove('hidden');
 };
 
 // --- Navigation Logics ---
 document.getElementById('nav-home-btn').onclick = () => {
     document.getElementById('nav-home-btn').classList.add('active');
-    document.getElementById('nav-profile-btn').classList.remove('active');
+    document.getElementById('nav-settings-btn').classList.remove('active');
     
     document.getElementById('dashboard-view').classList.remove('hidden');
-    document.getElementById('profile-view').classList.add('hidden');
 };
 
-document.getElementById('nav-profile-btn').onclick = () => {
-    document.getElementById('nav-profile-btn').classList.add('active');
-    document.getElementById('nav-home-btn').classList.remove('active');
-
-    document.getElementById('dashboard-view').classList.add('hidden');
-    document.getElementById('profile-view').classList.remove('hidden');
+document.getElementById('nav-settings-btn').onclick = () => {
+    chrome.runtime.openOptionsPage();
 };
 
 document.getElementById('buy-btn').onclick = () => {

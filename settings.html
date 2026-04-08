@@ -223,6 +223,19 @@
     input:checked + .slider:before {
       transform: translateX(16px);
     }
+
+    /* Light Mode */
+    body.light-mode {
+      --bg: #f8fafc;
+      --card-bg: rgba(255, 255, 255, 0.8);
+      --text: #1e293b;
+      --text-muted: #64748b;
+      --border: rgba(0, 0, 0, 0.1);
+    }
+
+    body.light-mode .profile-card {
+      background: rgba(255, 255, 255, 0.8) !important;
+    }
   </style>
 </head>
 
@@ -231,6 +244,20 @@
     <div class="header">
       <h1>AnyPNG</h1>
       <p class="subtitle">Personalized AI Optimization</p>
+    </div>
+
+    <!-- Profile Section -->
+    <div class="section" id="profile-section">
+      <label>Profile</label>
+      <div class="profile-card" style="background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 12px;">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div style="width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, #818cf8, #34d399); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 16px;" id="profile-avatar">?</div>
+          <div style="flex: 1;">
+            <p style="font-weight: 600; margin: 0; font-size: 14px;" id="profile-name">Not logged in</p>
+            <p style="font-size: 12px; color: var(--text-muted); margin: 2px 0 0;" id="profile-email">-</p>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="section">
@@ -259,11 +286,23 @@
       </p>
     </div>
 
+    <div class="section">
+      <label style="display: flex; align-items: center; justify-content: space-between;">
+        <span>Light Theme</span>
+        <label class="switch" style="margin: 0;">
+          <input type="checkbox" id="themeToggle">
+          <span class="slider round"></span>
+        </label>
+      </label>
+    </div>
+
     <div class="button-group">
       <button id="saveBtn">Save Preferences</button>
       <button id="testBtn"
         style="margin-top: 12px; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border); color: var(--text-muted); font-size: 14px;">Test
         API Connection</button>
+      <button id="logoutBtn"
+        style="margin-top: 12px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: #ef4444; font-size: 14px;">Logout</button>
       <div id="status">Settings updated successfully!</div>
       <div id="testStatus"
         style="margin-top: 12px; font-size: 13px; text-align: center; opacity: 0; transition: opacity 0.3s;"></div>

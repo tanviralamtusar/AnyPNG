@@ -1,5 +1,10 @@
+// 🔒 Supabase Config
+const SUPABASE_URL = "https://yknravxmhhwgwccflefc.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlrbnJhdnhtaGh3Z3djY2ZsZWZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDE1NzksImV4cCI6MjA4NzYxNzU3OX0.8crtZn3ZHqqaCg0VKLuhSzjNv0Kxf9vPolAfCwB_edI";
+
 // Load saved settings when the options page opens
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+    // Load sync settings
     chrome.storage.sync.get(['upscaleFactor', 'enableAdvancedPrompt'], (result) => {
         if (result.upscaleFactor) {
             document.getElementById('upscaleFactor').value = result.upscaleFactor;
@@ -8,6 +13,41 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('enableAdvancedPrompt').checked = result.enableAdvancedPrompt;
         }
     });
+
+    // Load local settings (theme)
+    chrome.storage.local.get(['theme', 'supabaseSession'], async (data) => {
+        const profileSection = document.getElementById('profile-section');
+        
+        if (data.theme === 'light') {
+            document.getElementById('themeToggle').checked = true;
+            document.body.classList.add('light-mode');
+        }
+        
+        if (data.supabaseSession) {
+            await loadProfile(data.supabaseSession);
+        } else {
+            profileSection.style.display = 'none';
+        }
+    });
+});
+
+async function loadProfile(session) {
+    const nameStr = session.user.email.split('@')[0];
+    const name = session.user.user_metadata?.full_name || nameStr.charAt(0).toUpperCase() + nameStr.slice(1);
+    document.getElementById('profile-name').innerText = name;
+    document.getElementById('profile-email').innerText = session.user.email;
+    document.getElementById('profile-avatar').innerText = name.charAt(0).toUpperCase();
+}
+
+// Theme toggle
+document.getElementById('themeToggle').addEventListener('change', async (e) => {
+    const isLight = e.target.checked;
+    if (isLight) {
+        document.body.classList.add('light-mode');
+    } else {
+        document.body.classList.remove('light-mode');
+    }
+    await chrome.storage.local.set({ theme: isLight ? 'light' : 'dark' });
 });
 
 // 🔒 HARDCODED API CREDENTIALS (Matches background.js)
@@ -77,4 +117,13 @@ document.getElementById('saveBtn').addEventListener('click', () => {
             document.getElementById('saveBtn').innerText = originalText;
         }, 2000);
     });
+});
+
+// Logout button
+document.getElementById('logoutBtn').addEventListener('click', async () => {
+    await chrome.storage.local.remove('supabaseSession');
+    document.getElementById('profile-name').innerText = 'Not logged in';
+    document.getElementById('profile-email').innerText = '-';
+    document.getElementById('profile-avatar').innerText = '?';
+    window.close();
 });
