@@ -4,6 +4,28 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
 // Load saved settings when the options page opens
 document.addEventListener('DOMContentLoaded', async () => {
+    // Tab switching logic
+    const menuItems = document.querySelectorAll('.menu-item');
+    const tabContents = document.querySelectorAll('.tab-content');
+
+    menuItems.forEach(item => {
+        item.addEventListener('click', () => {
+            const tabId = item.getAttribute('data-tab');
+            
+            // Update active state in sidebar
+            menuItems.forEach(mi => mi.classList.remove('active'));
+            item.classList.add('active');
+
+            // Switch content views
+            tabContents.forEach(content => {
+                content.classList.remove('active');
+                if (content.id === tabId) {
+                    content.classList.add('active');
+                }
+            });
+        });
+    });
+
     // Load sync settings
     chrome.storage.sync.get(['upscaleFactor', 'enableAdvancedPrompt'], (result) => {
         if (result.upscaleFactor) {
@@ -20,7 +42,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         if (data.theme === 'light') {
             document.getElementById('themeToggle').checked = true;
-            document.body.classList.add('light-mode');
+            document.body.classList.add('light-theme');
         }
         
         if (data.supabaseSession) {
@@ -43,9 +65,9 @@ async function loadProfile(session) {
 document.getElementById('themeToggle').addEventListener('change', async (e) => {
     const isLight = e.target.checked;
     if (isLight) {
-        document.body.classList.add('light-mode');
+        document.body.classList.add('light-theme');
     } else {
-        document.body.classList.remove('light-mode');
+        document.body.classList.remove('light-theme');
     }
     await chrome.storage.local.set({ theme: isLight ? 'light' : 'dark' });
 });
@@ -58,27 +80,19 @@ const API_CONFIG = {
 
 // Test API Connection
 document.getElementById('testBtn').addEventListener('click', async () => {
-    const testBtn = document.getElementById('testBtn');
     const testStatus = document.getElementById('testStatus');
 
     // UI Loading State
-    const originalText = testBtn.innerText;
-    testBtn.innerText = 'Testing...';
-    testBtn.disabled = true;
     testStatus.innerText = 'Checking server response...';
     testStatus.style.color = 'var(--text-muted)';
     testStatus.style.opacity = '1';
 
     try {
-        // We attempt a simple fetch to the base URL or health endpoint
-        // Since we don't know the full API, we check if the base URL responds
         const response = await fetch(API_CONFIG.url, {
             method: 'GET',
             headers: { 'Authorization': `Bearer ${API_CONFIG.basicToken}` }
         });
 
-        // Even if it returns 404 or 405, if it's not a network error, 
-        // the server is reachable and the token is being processed.
         if (response.status === 200 || response.status === 405 || response.status === 404 || response.status === 401) {
             testStatus.innerText = '✅ Connection Successful!';
             testStatus.style.color = 'var(--accent)';
@@ -89,10 +103,6 @@ document.getElementById('testBtn').addEventListener('click', async () => {
         testStatus.innerText = `❌ Connection Failed: ${error.message}`;
         testStatus.style.color = '#ef4444';
     } finally {
-        testBtn.innerText = originalText;
-        testBtn.disabled = false;
-
-        // Hide message after a delay
         setTimeout(() => {
             testStatus.style.opacity = '0';
         }, 5000);
@@ -130,7 +140,6 @@ document.getElementById('logoutBtn').addEventListener('click', async () => {
     try {
         window.close();
     } catch (e) {
-        // Fallback: redirect to about page as workaround
         window.location.href = 'chrome://extensions/';
     }
 });

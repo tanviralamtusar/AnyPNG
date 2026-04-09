@@ -45,7 +45,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (session) {
         showDashboard(session);
     } else {
-        document.getElementById('auth-view').classList.remove('hidden');
+        window.location.replace('login.html');
     }
     loadTheme();
 });
@@ -54,121 +54,14 @@ document.getElementById('settings-btn').onclick = () => {
     chrome.runtime.openOptionsPage();
 };
 
-document.getElementById('toggle-signup').onclick = () => {
-    isLoginMode = !isLoginMode;
-    document.getElementById('login-text').innerText = isLoginMode ? 'Login' : 'Create Account';
-    document.getElementById('toggle-signup').innerText = isLoginMode ? 'Need an account? Sign Up' : 'Have an account? Login';
-    document.getElementById('error-msg').innerText = "";
-};
 
-document.getElementById('login-btn').onclick = async () => {
-    const email = document.getElementById('email').value.trim();
-    const password = document.getElementById('password').value;
-    const errorMsg = document.getElementById('error-msg');
-    const loginBtn = document.getElementById('login-btn');
-    const originalBtnHTML = loginBtn.innerHTML;
-    
-    if (!email || !password) {
-        errorMsg.innerText = "Please enter email and password";
-        return;
-    }
-    
-    // Disable button during login and show loading state
-    loginBtn.disabled = true;
-    loginBtn.innerHTML = '<span>⏳</span> Loading...';
-    errorMsg.innerText = "";
-    
-    const endpoint = isLoginMode ? 'token?grant_type=password' : 'signup';
-    
-    try {
-        console.log('Attempting auth to:', `${SUPABASE_URL}/auth/v1/${endpoint}`);
-        
-        const bodyData = isLoginMode 
-            ? { email, password, grant_type: 'password' } 
-            : { email, password };
-            
-        const res = await fetch(`${SUPABASE_URL}/auth/v1/${endpoint}`, {
-            method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json', 
-                'apikey': SUPABASE_ANON_KEY,
-                'x-client-info': 'anypng-extension'
-            },
-            body: JSON.stringify(bodyData)
-        });
-        
-        const data = await res.json();
-        
-        console.log('Auth response status:', res.status);
-        console.log('Auth response data:', JSON.stringify(data));
-        
-        if (!res.ok) {
-            let errorMessage = data.error_description || data.msg || data.error || data.message || `Error: ${res.status}`;
-            
-            if (data.code) {
-                switch (data.code) {
-                    case 'invalid_grant':
-                        errorMessage = "Invalid email or password";
-                        break;
-                    case 'weak_password':
-                        errorMessage = "Password is too weak. Use at least 6 characters.";
-                        break;
-                    case 'email_already_exists':
-                        errorMessage = "An account with this email already exists";
-                        break;
-                    case 'user_not_found':
-                        errorMessage = "No account found with this email";
-                        break;
-                }
-            }
-            
-            throw new Error(errorMessage);
-        }
-        
-        let accessToken = data.access_token || (data.session && data.session.access_token);
-        
-        if (!isLoginMode && !accessToken) {
-            if (data.id || (data.user && data.user.id)) {
-                errorMsg.innerText = "Account created! Please check your email to confirm.";
-                loginBtn.disabled = false;
-                loginBtn.innerHTML = originalBtnHTML;
-                return;
-            }
-        }
-        
-        if (!accessToken) {
-            throw new Error("No access token received from server");
-        }
-        
-        await chrome.storage.local.set({ supabaseSession: data });
-        showDashboard(data);
-    } catch (err) {
-        console.error('Login error:', err);
-        
-        if (err.name === 'TypeError' && err.message.includes('fetch')) {
-            errorMsg.innerText = "Network error. Please check your connection.";
-        } else {
-            errorMsg.innerText = err.message || "Login failed. Please try again.";
-        }
-        
-        loginBtn.disabled = false;
-        loginBtn.innerHTML = originalBtnHTML;
-    }
-};
 
 // --- Navigation Logics ---
 document.getElementById('nav-home-btn').onclick = async () => {
-    document.getElementById('nav-home-btn').classList.add('active');
-    document.getElementById('nav-settings-btn').classList.remove('active');
-    document.getElementById('logout-btn')?.classList.remove('active');
-    
-    // Check if logged in, show appropriate view
+    // Already on dashboard, maybe just reload or ensure state
     const { supabaseSession } = await chrome.storage.local.get('supabaseSession');
-    if (supabaseSession) {
-        document.getElementById('dashboard-view').classList.remove('hidden');
-    } else {
-        document.getElementById('dashboard-view').classList.add('hidden');
-        document.getElementById('auth-view').classList.remove('hidden');
+    if (!supabaseSession) {
+        window.location.replace('login.html');
     }
 };
 
@@ -181,13 +74,7 @@ document.getElementById('nav-settings-btn').onclick = () => {
 
 document.getElementById('logout-btn').onclick = async () => {
     await chrome.storage.local.remove('supabaseSession');
-    document.getElementById('dashboard-view').classList.add('hidden');
-    document.getElementById('auth-view').classList.remove('hidden');
-    document.getElementById('auth-view').querySelector('#email').value = '';
-    document.getElementById('auth-view').querySelector('#password').value = '';
-    isLoginMode = true;
-    document.getElementById('login-text').innerText = 'Login';
-    document.getElementById('toggle-signup').innerText = 'Need an account? Sign Up';
+    window.location.replace('login.html');
 };
 
 document.getElementById('buy-btn').onclick = () => {
@@ -208,8 +95,6 @@ document.getElementById('refresh-credits-btn').onclick = async () => {
 };
 
 async function showDashboard(session) {
-    document.getElementById('auth-view').classList.add('hidden');
-    document.getElementById('dashboard-view').classList.remove('hidden');
     document.getElementById('error-msg').innerText = "";
     
     // Normalize session object - handle different Supabase response formats
@@ -238,8 +123,7 @@ async function showDashboard(session) {
         console.error('Invalid session format:', session);
         document.getElementById('error-msg').innerText = "Session invalid. Please login again.";
         await chrome.storage.local.remove('supabaseSession');
-        document.getElementById('dashboard-view').classList.add('hidden');
-        document.getElementById('auth-view').classList.remove('hidden');
+        window.location.replace('login.html');
         return;
     }
     
@@ -279,8 +163,7 @@ async function showDashboard(session) {
         if (!res.ok) {
             if (res.status === 401) {
                 await chrome.storage.local.remove('supabaseSession');
-                document.getElementById('dashboard-view').classList.add('hidden');
-                document.getElementById('auth-view').classList.remove('hidden');
+                window.location.replace('login.html');
                 document.getElementById('error-msg').innerText = "Session expired. Please login again.";
                 return;
             }
@@ -339,25 +222,10 @@ async function showDashboard(session) {
     if (profileNameEl) profileNameEl.innerText = fullName;
 }
 
-// Theme Toggle
-document.getElementById('theme-toggle').addEventListener('change', async (e) => {
-    const isLight = e.target.checked;
-    if (isLight) {
-        document.body.classList.add('light-theme');
-        document.querySelector('.theme-label').innerText = 'Light';
-    } else {
-        document.body.classList.remove('light-theme');
-        document.querySelector('.theme-label').innerText = 'Dark';
-    }
-    await chrome.storage.local.set({ theme: isLight ? 'light' : 'dark' });
-});
-
 async function loadTheme() {
     const { theme } = await chrome.storage.local.get('theme');
     if (theme === 'light') {
         document.body.classList.add('light-theme');
-        document.getElementById('theme-toggle').checked = true;
-        document.querySelector('.theme-label').innerText = 'Light';
     }
 }
 
