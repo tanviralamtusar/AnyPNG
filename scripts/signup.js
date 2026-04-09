@@ -13,14 +13,15 @@ async function loadTheme() {
 }
 
 document.getElementById('signup-btn').onclick = async () => {
+    const fullname = document.getElementById('fullname').value.trim();
     const email = document.getElementById('email').value.trim();
     const password = document.getElementById('password').value;
     const errorMsg = document.getElementById('error-msg');
     const signupBtn = document.getElementById('signup-btn');
     const originalBtnHTML = signupBtn.innerHTML;
     
-    if (!email || !password) {
-        errorMsg.innerText = "Please enter email and password";
+    if (!fullname || !email || !password) {
+        errorMsg.innerText = "Please fill in all fields";
         return;
     }
     
@@ -29,7 +30,13 @@ document.getElementById('signup-btn').onclick = async () => {
     errorMsg.innerText = "";
     
     try {
-        const bodyData = { email, password };
+        const bodyData = { 
+            email, 
+            password,
+            data: { 
+                full_name: fullname
+            }
+        };
         const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
             method: 'POST',
             headers: { 
