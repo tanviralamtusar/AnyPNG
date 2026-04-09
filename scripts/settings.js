@@ -54,12 +54,101 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 async function loadProfile(session) {
+    const userId = session.user.id;
+    const accessToken = session.access_token;
+    
+    // Default from metadata
     const nameStr = session.user.email.split('@')[0];
-    const name = session.user.user_metadata?.full_name || nameStr.charAt(0).toUpperCase() + nameStr.slice(1);
-    document.getElementById('profile-name').innerText = name;
+    let displayName = session.user.user_metadata?.full_name || nameStr.charAt(0).toUpperCase() + nameStr.slice(1);
+    
+    try {
+        // Attempt to fetch from profiles table for most up-to-date name
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}&select=full_name`, {
+            method: 'GET',
+            headers: {
+                'apikey': SUPABASE_ANON_KEY,
+                'Authorization': `Bearer ${accessToken}`
+            }
+        });
+        
+        if (res.ok) {
+            const data = await res.json();
+            if (data && data.length > 0 && data[0].full_name) {
+                displayName = data[0].full_name;
+            }
+        }
+    } catch (e) {
+        console.error('Error fetching profile name:', e);
+    }
+
+    document.getElementById('profile-name').innerText = displayName;
     document.getElementById('profile-email').innerText = session.user.email;
-    document.getElementById('profile-avatar').innerText = name.charAt(0).toUpperCase();
+    document.getElementById('profile-avatar').innerText = displayName.charAt(0).toUpperCase();
+    document.getElementById('account-name').value = displayName;
 }
+
+// Update Profile Logic
+document.getElementById('updateProfileBtn')?.addEventListener('click', async () => {
+    const newName = document.getElementById('account-name').value;
+    const status = document.getElementById('accountStatus');
+    const btn = document.getElementById('updateProfileBtn');
+    
+    const { supabaseSession } = await chrome.storage.local.get('supabaseSession');
+    if (!supabaseSession) return;
+
+    const originalText = btn.innerText;
+    btn.innerText = 'Updating...';
+    btn.disabled = true;
+
+    try {
+        // 1. Update Profile Table
+        const profileRes = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${supabaseSession.user.id}`, {
+            method: 'PATCH',
+            headers: {
+                'apikey': SUPABASE_ANON_KEY,
+                'Authorization': `Bearer ${supabaseSession.access_token}`,
+                'Content-Type': 'application/json',
+                'Prefer': 'return=minimal'
+            },
+            body: JSON.stringify({ full_name: newName })
+        });
+
+        // 2. Update Auth Metadata
+        const authRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+            method: 'PUT',
+            headers: {
+                'apikey': SUPABASE_ANON_KEY,
+                'Authorization': `Bearer ${supabaseSession.access_token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ data: { full_name: newName } })
+        });
+
+        if (profileRes.ok && authRes.ok) {
+            // Success
+            status.innerText = 'Profile updated successfully!';
+            status.style.color = 'var(--success)';
+            
+            // Update UI
+            document.getElementById('profile-name').innerText = newName;
+            document.getElementById('profile-avatar').innerText = newName.charAt(0).toUpperCase();
+            
+            // Update local session data
+            const updatedUserData = await authRes.json();
+            const newSession = { ...supabaseSession, user: updatedUserData };
+            await chrome.storage.local.set({ supabaseSession: newSession });
+        } else {
+            throw new Error('Failed to update one or more sources.');
+        }
+    } catch (e) {
+        status.innerText = `Error: ${e.message}`;
+        status.style.color = 'var(--error)';
+    } finally {
+        btn.innerText = originalText;
+        btn.disabled = false;
+        setTimeout(() => { status.innerText = ''; }, 3000);
+    }
+});
 
 // Theme toggle
 document.getElementById('themeToggle').addEventListener('change', async (e) => {

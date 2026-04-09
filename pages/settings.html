@@ -102,12 +102,27 @@
 
         <div class="setting-row">
           <div class="setting-info">
+            <label>Display Name</label>
+            <p class="description">Your name as it appears across the AnyPNG extension.</p>
+          </div>
+          <div class="setting-control">
+            <input type="text" id="account-name" placeholder="Enter your name" class="settings-input">
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
             <label>Pro Subscription</label>
             <p class="description">Your current plan and remaining credits.</p>
           </div>
           <div class="setting-control">
             <span class="badge primary">Active</span>
           </div>
+        </div>
+
+        <div class="actions">
+          <button id="updateProfileBtn" class="save-button">Update Profile</button>
+          <span id="accountStatus" class="status-msg"></span>
         </div>
       </section>
 

@@ -183,6 +183,23 @@ h1 {
 }
 
 /* Controls */
+.settings-input {
+  background: #1a1a1c;
+  color: #fff;
+  border: 1px solid var(--glass-border);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  width: 100%;
+  max-width: 200px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.settings-input:focus {
+  border-color: var(--primary);
+}
+
 select {
   background: #1a1a1c;
   color: #fff;
