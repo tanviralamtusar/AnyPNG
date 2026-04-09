@@ -309,6 +309,12 @@ input:checked + .slider:before {
   transform: translateX(20px);
 }
 
+.actions {
+  margin-top: 32px;
+  display: flex;
+  align-items: center;
+}
+
 .save-button {
   background: var(--primary);
   color: #fff;

@@ -139,7 +139,7 @@ async function saveRating(rating, comment, isExplicit) {
         };
         if (comment !== null) payload.comment = comment;
 
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/ratings`, {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/ratings?on_conflict=user_id`, {
             method: 'POST',
             headers: {
                 'apikey': SUPABASE_ANON_KEY,
