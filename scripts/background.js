@@ -24,7 +24,11 @@ async function getValidSession() {
         try {
             const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY },
+                headers: { 
+                    'Content-Type': 'application/json', 
+                    'apikey': SUPABASE_ANON_KEY,
+                    'x-client-info': 'anypng-extension'
+                },
                 body: JSON.stringify({ refresh_token: supabaseSession.refresh_token })
             });
             
@@ -33,10 +37,13 @@ async function getValidSession() {
                 supabaseSession = { ...supabaseSession, ...newSession };
                 await chrome.storage.local.set({ supabaseSession: supabaseSession });
             } else {
+                const errorData = await res.json();
+                console.error('Session refresh failed:', errorData);
                 await chrome.storage.local.remove('supabaseSession');
                 return null;
             }
         } catch (e) {
+            console.error('Session refresh failed:', e);
             await chrome.storage.local.remove('supabaseSession');
             return null;
         }
@@ -158,7 +165,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             const fullDataUrl = await blobToDataUrl(blob);
             const base64Data = fullDataUrl.split(',')[1];
 
-            await setupOffscreenDocument('offscreen.html');
+            await setupOffscreenDocument('pages/offscreen.html');
             const result = await chrome.runtime.sendMessage({ target: 'offscreen', action: 'convertToPng', data: base64Data, mimeType: blob.type });
 
             if (result.error) throw new Error(result.error);
@@ -227,10 +234,15 @@ async function callWatermarkBackend(prompt, token) {
             lowerMsg.includes("cannot read image") || 
             lowerMsg.includes("image input") ||
             lowerMsg.includes("model") && lowerMsg.includes("image")) {
-            userMessage = "This AI service is currently unavailable. Please try again later or contact support.";
+            userMessage = "This image format is not supported. Please try a different image (PNG, JPG, or WebP recommended).";
+        } else if (lowerMsg.includes("failed to fetch") || lowerMsg.includes("network")) {
+            userMessage = "Network error. Please check your connection and try again.";
         }
         
         console.error("Watermark API Error:", error);
+        
+        // Clear processing state and notify UI
+        await chrome.storage.local.remove('watermarkProcessing');
         
         chrome.runtime.sendMessage({ action: "SHOW_ERROR", error: userMessage }).catch(() => {
             chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Error', message: userMessage });

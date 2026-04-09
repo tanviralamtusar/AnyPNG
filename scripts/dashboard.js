@@ -11,7 +11,11 @@ async function refreshSessionIfNeeded() {
         try {
             const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY },
+                headers: { 
+                    'Content-Type': 'application/json', 
+                    'apikey': SUPABASE_ANON_KEY,
+                    'x-client-info': 'anypng-extension'
+                },
                 body: JSON.stringify({ refresh_token: supabaseSession.refresh_token })
             });
             
@@ -20,9 +24,15 @@ async function refreshSessionIfNeeded() {
                 const updatedSession = { ...supabaseSession, ...newSession };
                 await chrome.storage.local.set({ supabaseSession: updatedSession });
                 return updatedSession;
+            } else {
+                console.log('Session refresh failed with status:', res.status);
+                const data = await res.json();
+                console.log('Refresh error:', data);
+                await chrome.storage.local.remove('supabaseSession');
+                return null;
             }
         } catch (e) {
-            console.log('Session refresh failed, clearing session');
+            console.log('Session refresh failed:', e);
             await chrome.storage.local.remove('supabaseSession');
             return null;
         }
@@ -48,46 +58,136 @@ document.getElementById('toggle-signup').onclick = () => {
     isLoginMode = !isLoginMode;
     document.getElementById('login-text').innerText = isLoginMode ? 'Login' : 'Create Account';
     document.getElementById('toggle-signup').innerText = isLoginMode ? 'Need an account? Sign Up' : 'Have an account? Login';
+    document.getElementById('error-msg').innerText = "";
 };
 
 document.getElementById('login-btn').onclick = async () => {
-    const email = document.getElementById('email').value;
+    const email = document.getElementById('email').value.trim();
     const password = document.getElementById('password').value;
+    const errorMsg = document.getElementById('error-msg');
+    const loginBtn = document.getElementById('login-btn');
+    const originalBtnHTML = loginBtn.innerHTML;
+    
+    if (!email || !password) {
+        errorMsg.innerText = "Please enter email and password";
+        return;
+    }
+    
+    // Disable button during login and show loading state
+    loginBtn.disabled = true;
+    loginBtn.innerHTML = '<span>⏳</span> Loading...';
+    errorMsg.innerText = "";
+    
     const endpoint = isLoginMode ? 'token?grant_type=password' : 'signup';
     
     try {
+        console.log('Attempting auth to:', `${SUPABASE_URL}/auth/v1/${endpoint}`);
+        
+        const bodyData = isLoginMode 
+            ? { email, password, grant_type: 'password' } 
+            : { email, password };
+            
         const res = await fetch(`${SUPABASE_URL}/auth/v1/${endpoint}`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY },
-            body: JSON.stringify({ email, password })
+            headers: { 
+                'Content-Type': 'application/json', 
+                'apikey': SUPABASE_ANON_KEY,
+                'x-client-info': 'anypng-extension'
+            },
+            body: JSON.stringify(bodyData)
         });
+        
         const data = await res.json();
         
-        if (!res.ok) throw new Error(data.error_description || data.msg);
+        console.log('Auth response status:', res.status);
+        console.log('Auth response data:', JSON.stringify(data));
+        
+        if (!res.ok) {
+            let errorMessage = data.error_description || data.msg || data.error || data.message || `Error: ${res.status}`;
+            
+            if (data.code) {
+                switch (data.code) {
+                    case 'invalid_grant':
+                        errorMessage = "Invalid email or password";
+                        break;
+                    case 'weak_password':
+                        errorMessage = "Password is too weak. Use at least 6 characters.";
+                        break;
+                    case 'email_already_exists':
+                        errorMessage = "An account with this email already exists";
+                        break;
+                    case 'user_not_found':
+                        errorMessage = "No account found with this email";
+                        break;
+                }
+            }
+            
+            throw new Error(errorMessage);
+        }
+        
+        let accessToken = data.access_token || (data.session && data.session.access_token);
+        
+        if (!isLoginMode && !accessToken) {
+            if (data.id || (data.user && data.user.id)) {
+                errorMsg.innerText = "Account created! Please check your email to confirm.";
+                loginBtn.disabled = false;
+                loginBtn.innerHTML = originalBtnHTML;
+                return;
+            }
+        }
+        
+        if (!accessToken) {
+            throw new Error("No access token received from server");
+        }
         
         await chrome.storage.local.set({ supabaseSession: data });
         showDashboard(data);
     } catch (err) {
-        document.getElementById('error-msg').innerText = err.message;
+        console.error('Login error:', err);
+        
+        if (err.name === 'TypeError' && err.message.includes('fetch')) {
+            errorMsg.innerText = "Network error. Please check your connection.";
+        } else {
+            errorMsg.innerText = err.message || "Login failed. Please try again.";
+        }
+        
+        loginBtn.disabled = false;
+        loginBtn.innerHTML = originalBtnHTML;
     }
+};
+
+// --- Navigation Logics ---
+document.getElementById('nav-home-btn').onclick = async () => {
+    document.getElementById('nav-home-btn').classList.add('active');
+    document.getElementById('nav-settings-btn').classList.remove('active');
+    document.getElementById('logout-btn')?.classList.remove('active');
+    
+    // Check if logged in, show appropriate view
+    const { supabaseSession } = await chrome.storage.local.get('supabaseSession');
+    if (supabaseSession) {
+        document.getElementById('dashboard-view').classList.remove('hidden');
+    } else {
+        document.getElementById('dashboard-view').classList.add('hidden');
+        document.getElementById('auth-view').classList.remove('hidden');
+    }
+};
+
+document.getElementById('nav-settings-btn').onclick = () => {
+    document.getElementById('nav-home-btn').classList.remove('active');
+    document.getElementById('nav-settings-btn').classList.add('active');
+    document.getElementById('logout-btn')?.classList.remove('active');
+    chrome.runtime.openOptionsPage();
 };
 
 document.getElementById('logout-btn').onclick = async () => {
     await chrome.storage.local.remove('supabaseSession');
     document.getElementById('dashboard-view').classList.add('hidden');
     document.getElementById('auth-view').classList.remove('hidden');
-};
-
-// --- Navigation Logics ---
-document.getElementById('nav-home-btn').onclick = () => {
-    document.getElementById('nav-home-btn').classList.add('active');
-    document.getElementById('nav-settings-btn').classList.remove('active');
-    
-    document.getElementById('dashboard-view').classList.remove('hidden');
-};
-
-document.getElementById('nav-settings-btn').onclick = () => {
-    chrome.runtime.openOptionsPage();
+    document.getElementById('auth-view').querySelector('#email').value = '';
+    document.getElementById('auth-view').querySelector('#password').value = '';
+    isLoginMode = true;
+    document.getElementById('login-text').innerText = 'Login';
+    document.getElementById('toggle-signup').innerText = 'Need an account? Sign Up';
 };
 
 document.getElementById('buy-btn').onclick = () => {
@@ -111,6 +211,37 @@ async function showDashboard(session) {
     document.getElementById('auth-view').classList.add('hidden');
     document.getElementById('dashboard-view').classList.remove('hidden');
     document.getElementById('error-msg').innerText = "";
+    
+    // Normalize session object - handle different Supabase response formats
+    // Response could be: { user, session } or { user, access_token } or { session: { user, access_token } }
+    let userId = null;
+    let accessToken = null;
+    
+    if (session.user && session.user.id) {
+        // Format: { user: { id: ... }, access_token: ... }
+        userId = session.user.id;
+        accessToken = session.access_token || (session.session && session.session.access_token);
+    } else if (session.session && session.session.user) {
+        // Format: { session: { user: { id: ... }, access_token: ... } }
+        userId = session.session.user.id;
+        accessToken = session.session.access_token;
+    } else if (session.id) {
+        // Format: { id: ..., access_token: ... } (user is the session itself)
+        userId = session.id;
+        accessToken = session.access_token;
+    }
+    
+    console.log('Session user ID:', userId);
+    console.log('Session access token:', accessToken ? 'present' : 'missing');
+    
+    if (!userId || !accessToken) {
+        console.error('Invalid session format:', session);
+        document.getElementById('error-msg').innerText = "Session invalid. Please login again.";
+        await chrome.storage.local.remove('supabaseSession');
+        document.getElementById('dashboard-view').classList.add('hidden');
+        document.getElementById('auth-view').classList.remove('hidden');
+        return;
+    }
     
     // Check settings for advanced prompt
     chrome.storage.sync.get(['enableAdvancedPrompt'], (result) => {
@@ -140,9 +271,9 @@ async function showDashboard(session) {
     });
 
     try {
-        // Fetch credits from profiles table
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${session.user.id}&select=credits`, {
-            headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${session.access_token}` }
+        // Fetch credits from profiles table using normalized session
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}&select=credits`, {
+            headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${accessToken}` }
         });
 
         if (!res.ok) {
@@ -158,14 +289,19 @@ async function showDashboard(session) {
         }
 
         const data = await res.json();
+        const MAX_CREDITS = 100;
         if (data && data.length > 0) {
-            document.getElementById('credit-count').innerText = data[0].credits;
-            document.getElementById('profile-credits-used').innerText = Math.max(0, 100 - data[0].credits); // Assuming 100 max for demo
-            document.getElementById('profile-credits-total').innerText = "/ 100";
-            document.getElementById('profile-progress').style.width = `${Math.max(0, 100 - data[0].credits)}%`;
+            const credits = data[0].credits || 0;
+            const usedCredits = Math.max(0, MAX_CREDITS - credits);
+            document.getElementById('credit-count').innerText = credits;
+            document.getElementById('profile-credits-used').innerText = usedCredits;
+            document.getElementById('profile-credits-total').innerText = `/ ${MAX_CREDITS}`;
+            document.getElementById('profile-progress').style.width = `${(usedCredits / MAX_CREDITS) * 100}%`;
         } else {
             document.getElementById('credit-count').innerText = "0";
-            console.warn("No profile found for user", session.user.id);
+            document.getElementById('profile-credits-used').innerText = "0";
+            document.getElementById('profile-progress').style.width = "0%";
+            console.warn("No profile found for user", userId);
         }
     } catch (err) {
         document.getElementById('credit-count').innerText = "Err";
@@ -173,11 +309,34 @@ async function showDashboard(session) {
         console.error(err);
     }
     
-    // Fill out Profile Basic info
-    document.getElementById('profile-email').innerText = session.user.email;
-    const nameStr = session.user.email.split('@')[0];
-    document.getElementById('profile-name').innerText = nameStr.charAt(0).toUpperCase() + nameStr.slice(1);
-    document.getElementById('profile-fullname').innerText = session.user.user_metadata?.full_name || nameStr.charAt(0).toUpperCase() + nameStr.slice(1);
+    // Fill out Profile Basic info - handle different session formats
+    const profileInfo = document.getElementById('profile-info');
+    if (profileInfo) {
+        profileInfo.classList.remove('hidden');
+    }
+    
+    // Try to get user email from various possible locations
+    let userEmail = '';
+    let userMetadata = null;
+    
+    if (session.user && session.user.email) {
+        userEmail = session.user.email;
+        userMetadata = session.user.user_metadata;
+    } else if (session.session && session.session.user && session.session.user.email) {
+        userEmail = session.session.user.email;
+        userMetadata = session.session.user.user_metadata;
+    }
+    
+    const nameStr = userEmail ? userEmail.split('@')[0] : 'User';
+    const displayName = nameStr.charAt(0).toUpperCase() + nameStr.slice(1);
+    const fullName = userMetadata?.full_name || displayName;
+    
+    // Update any elements that exist
+    const profileEmailEl = document.getElementById('profile-email');
+    if (profileEmailEl) profileEmailEl.innerText = userEmail;
+    
+    const profileNameEl = document.getElementById('profile-name');
+    if (profileNameEl) profileNameEl.innerText = fullName;
 }
 
 // Theme Toggle
@@ -208,6 +367,11 @@ loadTheme();
 // Popup Watermark Handlers
 document.getElementById('popup-retry').onclick = async () => {
     const prompt = document.getElementById('popup-prompt').value;
+    
+    // Clear error message
+    document.getElementById('error-msg').innerText = "";
+    
+    // Reset UI to processing state
     document.getElementById('popup-result-img').style.display = "none";
     document.getElementById('processing-container').classList.remove('hidden');
     document.querySelector('.progress-percentage').innerText = "0%";
@@ -215,6 +379,7 @@ document.getElementById('popup-retry').onclick = async () => {
     document.querySelector('.processing-status-text').innerText = "Starting...";
     document.getElementById('popup-retry').disabled = true;
     document.getElementById('popup-download').disabled = true;
+    document.getElementById('popup-placeholder').classList.add('hidden');
     
     await chrome.storage.local.set({ watermarkProcessing: true });
     chrome.runtime.sendMessage({ action: "RETRY_WATERMARK", prompt: prompt });
@@ -246,8 +411,20 @@ chrome.runtime.onMessage.addListener((message) => {
     } else if (message.action === "SHOW_ERROR") {
         document.getElementById('processing-container').classList.add('hidden');
         document.getElementById('popup-result-img').style.display = "none";
+        document.getElementById('popup-placeholder').classList.remove('hidden');
         document.getElementById('popup-retry').disabled = false;
-        document.getElementById('error-msg').innerText = message.error || "An error occurred";
+        document.getElementById('popup-download').disabled = true;
+        
+        const errorText = message.error || "An error occurred";
+        document.getElementById('error-msg').innerText = errorText;
+        
+        // Also show notification if popup is not visible
+        chrome.notifications.create({ 
+            type: 'basic', 
+            iconUrl: 'icons/icon48.png', 
+            title: 'AnyPNG Error', 
+            message: errorText 
+        });
     } else if (message.action === "PROCESSING_WATERMARK") {
         document.getElementById('popup-placeholder').classList.add('hidden');
         document.getElementById('popup-result-img').style.display = "none";

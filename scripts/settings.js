@@ -53,7 +53,7 @@ document.getElementById('themeToggle').addEventListener('change', async (e) => {
 // 🔒 HARDCODED API CREDENTIALS (Matches background.js)
 const API_CONFIG = {
     url: "https://png.botbhai.net",
-    token: "my_super_secret_hostinger_token_123!"
+    basicToken: "my_super_secret_hostinger_token_123!"
 };
 
 // Test API Connection
@@ -74,7 +74,7 @@ document.getElementById('testBtn').addEventListener('click', async () => {
         // Since we don't know the full API, we check if the base URL responds
         const response = await fetch(API_CONFIG.url, {
             method: 'GET',
-            headers: { 'Authorization': `Bearer ${API_CONFIG.token}` }
+            headers: { 'Authorization': `Bearer ${API_CONFIG.basicToken}` }
         });
 
         // Even if it returns 404 or 405, if it's not a network error, 
@@ -125,5 +125,12 @@ document.getElementById('logoutBtn').addEventListener('click', async () => {
     document.getElementById('profile-name').innerText = 'Not logged in';
     document.getElementById('profile-email').innerText = '-';
     document.getElementById('profile-avatar').innerText = '?';
-    window.close();
+    
+    // Close the options page - use fallback for compatibility
+    try {
+        window.close();
+    } catch (e) {
+        // Fallback: redirect to about page as workaround
+        window.location.href = 'chrome://extensions/';
+    }
 });
