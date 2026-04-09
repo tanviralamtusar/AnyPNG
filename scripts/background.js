@@ -10,8 +10,46 @@ chrome.runtime.onInstalled.addListener(() => {
 // 🔒 API CONFIGURATION
 const API_CONFIG = {
     url: "https://png.botbhai.net",
-    basicToken: "my_super_secret_hostinger_token_123!" // Used for free local tools
+    basicToken: "my_super_secret_hostinger_token_123!"
 };
+
+const SUPABASE_URL = "https://yknravxmhhwgwccflefc.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlrbnJhdnhtaGh3Z3djY2ZsZWZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDE1NzksImV4cCI6MjA4NzYxNzU3OX0.8crtZn3ZHqqaCg0VKLuhSzjNv0Kxf9vPolAfCwB_edI";
+
+async function getValidSession() {
+    let { supabaseSession } = await chrome.storage.local.get('supabaseSession');
+    if (!supabaseSession) return null;
+    
+    if (supabaseSession.refresh_token) {
+        try {
+            const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json', 
+                    'apikey': SUPABASE_ANON_KEY,
+                    'x-client-info': 'anypng-extension'
+                },
+                body: JSON.stringify({ refresh_token: supabaseSession.refresh_token })
+            });
+            
+            if (res.ok) {
+                const newSession = await res.json();
+                supabaseSession = { ...supabaseSession, ...newSession };
+                await chrome.storage.local.set({ supabaseSession: supabaseSession });
+            } else {
+                const errorData = await res.json();
+                console.error('Session refresh failed:', errorData);
+                await chrome.storage.local.remove('supabaseSession');
+                return null;
+            }
+        } catch (e) {
+            console.error('Session refresh failed:', e);
+            await chrome.storage.local.remove('supabaseSession');
+            return null;
+        }
+    }
+    return supabaseSession;
+}
 
 let cachedImageBlob = null;
 let currentTabId = null;
@@ -27,39 +65,39 @@ const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
 });
 
 async function setupOffscreenDocument(path) {
-    const existingContexts = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'], documentUrls:[chrome.runtime.getURL(path)] });
+    const existingContexts = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'], documentUrls: [chrome.runtime.getURL(path)] });
     if (existingContexts.length > 0) return;
     await chrome.offscreen.createDocument({ url: path, reasons: ['WORKERS'], justification: 'Conversion' });
 }
 
 function toggleLoadingScreen(tabId, show, text = "") {
     chrome.tabs.sendMessage(tabId, { action: show ? "SHOW_LOADING" : "HIDE_LOADING", text: text })
-    .catch(() => { if (show) chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'AnyPNG', message: text }); });
+        .catch(() => { if (show) chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'AnyPNG', message: text }); });
 }
 
 // Listen for clicks
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-    
+
     // ==========================================
     // 💎 PRO TOOL: WATERMARK (Uses Supabase Token & In-Page Editor)
     // ==========================================
     if (info.menuItemId === "watermark_png") {
-        const { supabaseSession } = await chrome.storage.local.get('supabaseSession');
+        const supabaseSession = await getValidSession();
         if (!supabaseSession) {
             chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Login Required', message: 'Please click the AnyPNG icon in your toolbar to Login first!' });
             return;
         }
 
         currentTabId = tab.id;
-        
+
         // Notify user that processing started
         chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'AnyPNG Processing', message: 'Removing watermark... Please wait.' });
         await chrome.storage.local.set({ watermarkProcessing: true });
-        chrome.runtime.sendMessage({ action: "PROCESSING_WATERMARK" }).catch(() => {});
+        chrome.runtime.sendMessage({ action: "PROCESSING_WATERMARK" }).catch(() => { });
 
         // Try to open the popup automatically
         if (chrome.action && chrome.action.openPopup) {
-            chrome.action.openPopup().catch(() => {});
+            chrome.action.openPopup().catch(() => { });
         }
 
         try {
@@ -67,13 +105,13 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             cachedImageBlob = await response.blob();
             const base64Original = await blobToDataUrl(cachedImageBlob);
             await chrome.storage.local.set({ lastOriginalImage: base64Original });
-            
+
             await callWatermarkBackend(DEFAULT_PROMPT, supabaseSession.access_token);
         } catch (e) {
             chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Error', message: "Failed to fetch image: " + e.message });
         }
-    } 
-    
+    }
+
     // ==========================================
     // 🆓 FREE TOOLS: UPSCALE & BG REMOVE (Uses Basic Token & Standard Loading)
     // ==========================================
@@ -82,7 +120,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             const scale = settings.upscaleFactor || '2';
 
             try {
-                toggleLoadingScreen(tab.id, true, "Running local AI on your server...");
+                toggleLoadingScreen(tab.id, true, "Running AI on server...");
 
                 const response = await fetch(info.srcUrl);
                 const imageBlob = await response.blob();
@@ -91,12 +129,12 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
                 // 🟢 FIXED THE 404 ERROR HERE: Name matches the python server exactly!
                 let endpoint = info.menuItemId === "upscale_png" ? "/upscale" : "/remove-background";
-                if (info.menuItemId === "upscale_png") formData.append('scale', scale); 
+                if (info.menuItemId === "upscale_png") formData.append('scale', scale);
 
                 // 🟢 FIXED THE 401 ERROR HERE: Uses Basic Token instead of Supabase Token!
                 const apiRes = await fetch(`${API_CONFIG.url}${endpoint}`, {
                     method: 'POST',
-                    headers: { 'Authorization': `Bearer ${API_CONFIG.basicToken}` }, 
+                    headers: { 'Authorization': `Bearer ${API_CONFIG.basicToken}` },
                     body: formData
                 });
 
@@ -104,18 +142,18 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
                 const finalBlob = await apiRes.blob();
                 const downloadUrl = await blobToDataUrl(finalBlob);
-                
+
                 let prefix = info.menuItemId === "upscale_png" ? `AnyPNG_Upscaled_${scale}x` : `AnyPNG_Transparent`;
                 chrome.downloads.download({ url: downloadUrl, filename: `${prefix}_${Date.now()}.png` });
 
             } catch (error) {
                 chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Failed', message: error.message });
             } finally {
-                toggleLoadingScreen(tab.id, false); 
+                toggleLoadingScreen(tab.id, false);
             }
         });
-    } 
-    
+    }
+
     // ==========================================
     // 🔄 LOCAL TOOL: PNG CONVERSION
     // ==========================================
@@ -125,9 +163,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             const response = await fetch(info.srcUrl);
             const blob = await response.blob();
             const fullDataUrl = await blobToDataUrl(blob);
-            const base64Data = fullDataUrl.split(',')[1]; 
+            const base64Data = fullDataUrl.split(',')[1];
 
-            await setupOffscreenDocument('offscreen.html');
+            await setupOffscreenDocument('pages/offscreen.html');
             const result = await chrome.runtime.sendMessage({ target: 'offscreen', action: 'convertToPng', data: base64Data, mimeType: blob.type });
 
             if (result.error) throw new Error(result.error);
@@ -144,7 +182,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 // Helper Function specifically for the Watermark API
 async function callWatermarkBackend(prompt, token) {
     let blobToProcess = cachedImageBlob;
-    
+
     // If service worker restarted, try to load from storage
     if (!blobToProcess) {
         const { lastOriginalImage } = await chrome.storage.local.get('lastOriginalImage');
@@ -152,7 +190,7 @@ async function callWatermarkBackend(prompt, token) {
             const res = await fetch(lastOriginalImage);
             blobToProcess = await res.blob();
         } else {
-            chrome.runtime.sendMessage({ action: "SHOW_ERROR", error: "Original image lost. Please right-click and try again." }).catch(() => {});
+            chrome.runtime.sendMessage({ action: "SHOW_ERROR", error: "Original image lost. Please right-click and try again." }).catch(() => { });
             return;
         }
     }
@@ -175,7 +213,7 @@ async function callWatermarkBackend(prompt, token) {
 
         const finalBlob = await apiRes.blob();
         const base64Data = await blobToDataUrl(finalBlob);
-        
+
         // Save to storage for the popup to read
         await chrome.storage.local.set({ lastWatermarkResult: base64Data, watermarkProcessing: false });
 
@@ -187,19 +225,39 @@ async function callWatermarkBackend(prompt, token) {
 
     } catch (error) {
         await chrome.storage.local.set({ watermarkProcessing: false });
-        chrome.runtime.sendMessage({ action: "SHOW_ERROR", error: error.message }).catch(() => {
-            chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Error', message: error.message });
+        
+        let userMessage = error.message || "Unknown error";
+        const lowerMsg = userMessage.toLowerCase();
+        
+        // Check for model/image input errors
+        if (lowerMsg.includes("does not support image") || 
+            lowerMsg.includes("cannot read image") || 
+            lowerMsg.includes("image input") ||
+            lowerMsg.includes("model") && lowerMsg.includes("image")) {
+            userMessage = "This image format is not supported. Please try a different image (PNG, JPG, or WebP recommended).";
+        } else if (lowerMsg.includes("failed to fetch") || lowerMsg.includes("network")) {
+            userMessage = "Network error. Please check your connection and try again.";
+        }
+        
+        console.error("Watermark API Error:", error);
+        
+        // Clear processing state and notify UI
+        await chrome.storage.local.remove('watermarkProcessing');
+        
+        chrome.runtime.sendMessage({ action: "SHOW_ERROR", error: userMessage }).catch(() => {
+            chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Error', message: userMessage });
         });
     }
 }
 
 // UI Message listeners for the Pro Editor
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
     if (message.action === "RETRY_WATERMARK") {
-        chrome.storage.local.get('supabaseSession', async (data) => {
+        const supabaseSession = await getValidSession();
+        if (supabaseSession) {
             const prompt = message.prompt || DEFAULT_PROMPT;
-            await callWatermarkBackend(prompt, data.supabaseSession.access_token);
-        });
+            await callWatermarkBackend(prompt, supabaseSession.access_token);
+        }
     } else if (message.action === "DOWNLOAD_RESULT") {
         chrome.downloads.download({ url: message.url, filename: `AnyPNG_Pro_Cleaned_${Date.now()}.png` });
     }

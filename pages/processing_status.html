@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Processing | AnyPNG</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@200;300;400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "inverse-primary": "#2949ef",
+              "on-secondary-container": "#e3ffe4",
+              "error-container": "#a70138",
+              "surface-tint": "#9ba8ff",
+              "primary": "#9ba8ff",
+              "on-error-container": "#ffb2b9",
+              "on-surface-variant": "#adaaaa",
+              "primary-dim": "#4963ff",
+              "surface-container": "#1a1a1a",
+              "surface-container-low": "#131313",
+              "outline": "#767575",
+              "outline-variant": "#484847",
+              "on-surface": "#ffffff",
+              "secondary-dim": "#24f07e",
+              "primary-fixed-dim": "#778aff",
+              "surface": "#0e0e0e",
+              "on-error": "#490013",
+              "inverse-surface": "#fcf9f8",
+              "tertiary": "#c180ff",
+              "on-primary-fixed-variant": "#001a88",
+              "secondary": "#3fff8b",
+              "on-tertiary-fixed": "#270048",
+              "on-tertiary-fixed-variant": "#560094",
+              "background": "#0e0e0e",
+              "surface-container-highest": "#262626",
+              "inverse-on-surface": "#565555",
+              "tertiary-fixed-dim": "#c488ff",
+              "primary-fixed": "#8999ff",
+              "on-secondary-fixed-variant": "#006832",
+              "tertiary-fixed": "#ce9bff",
+              "secondary-fixed": "#3fff8b",
+              "surface-container-high": "#20201f",
+              "surface-variant": "#262626",
+              "secondary-fixed-dim": "#24f07e",
+              "surface-bright": "#2c2c2c",
+              "tertiary-container": "#af5cfe",
+              "on-secondary-fixed": "#004820",
+              "surface-dim": "#0e0e0e",
+              "on-tertiary": "#33005b",
+              "secondary-container": "#006d35",
+              "on-secondary": "#005d2c",
+              "error-dim": "#d73357",
+              "on-primary": "#001c8e",
+              "error": "#ff6e84",
+              "on-primary-container": "#001470",
+              "surface-container-lowest": "#000000",
+              "on-background": "#ffffff",
+              "primary-container": "#8999ff",
+              "on-tertiary-container": "#000000",
+              "on-primary-fixed": "#000000",
+              "tertiary-dim": "#9c48ea"
+            },
+            fontFamily: {
+              "headline": ["Manrope"],
+              "body": ["Manrope"],
+              "label": ["Manrope"]
+            },
+            borderRadius: {"DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px"},
+          },
+        },
+      }
+    </script>
+<style>
+        .glass-card {
+            background: rgba(38, 38, 38, 0.6);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+        }
+        .signature-glow {
+            background: linear-gradient(90deg, #9ba8ff 0%, #c180ff 100%);
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-surface font-body selection:bg-primary/30 min-h-screen flex flex-col">
+<!-- TopAppBar -->
+<header class="fixed top-0 z-50 w-full bg-[#0e0e0e]/80 backdrop-blur-[20px] shadow-[0_20px_40px_0_rgba(255,255,255,0.04)] h-16 flex justify-between items-center px-6">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-[#9ba8ff]" style="font-variation-settings: 'FILL' 1;">auto_awesome</span>
+<span class="font-manrope font-bold text-lg tracking-tight text-xl font-black text-transparent bg-clip-text bg-gradient-to-r from-[#9ba8ff] to-[#c180ff]">AnyPNG</span>
+</div>
+<div class="flex items-center gap-4">
+<button class="hover:bg-surface-container-highest transition-colors active:scale-95 duration-200 ease-out p-2 rounded-full">
+<span class="material-symbols-outlined">settings</span>
+</button>
+</div>
+</header>
+<!-- Main Canvas -->
+<main class="flex-grow pt-24 pb-32 px-6 max-w-lg mx-auto w-full">
+<!-- Status Header (Asymmetric Layout) -->
+<section class="mb-10">
+<span class="text-secondary font-bold tracking-widest text-[10px] uppercase block mb-2">System Active</span>
+<h1 class="text-4xl font-extrabold tracking-tighter leading-tight mb-4">
+                Enhancing your <br/>
+<span class="text-transparent bg-clip-text bg-gradient-to-r from-primary to-tertiary">Visual Reality.</span>
+</h1>
+</section>
+<!-- Progress Bento Section -->
+<div class="space-y-4">
+<!-- Glass Credit Module (Primary Progress) -->
+<div class="glass-card p-8 rounded-xl border border-outline-variant/15 flex flex-col items-center justify-center relative overflow-hidden">
+<div class="absolute top-4 right-4 text-on-surface-variant">
+<span class="material-symbols-outlined animate-spin" style="animation-duration: 3s;">sync</span>
+</div>
+<!-- Circular Progress Mockup -->
+<div class="relative w-48 h-48 flex items-center justify-center mb-6">
+<svg class="w-full h-full -rotate-90">
+<circle class="text-surface-container-highest" cx="96" cy="96" fill="transparent" r="88" stroke="currentColor" stroke-width="8"></circle>
+<circle cx="96" cy="96" fill="transparent" r="88" stroke="url(#gradient)" stroke-dasharray="552.92" stroke-dashoffset="193.52" stroke-linecap="round" stroke-width="12"></circle>
+<defs>
+<lineargradient id="gradient" x1="0%" x2="100%" y1="0%" y2="0%">
+<stop offset="0%" stop-color="#9ba8ff"></stop>
+<stop offset="100%" stop-color="#c180ff"></stop>
+</lineargradient>
+</defs>
+</svg>
+<div class="absolute flex flex-col items-center">
+<span class="text-5xl font-black tracking-tighter">65%</span>
+<span class="text-[10px] font-medium uppercase tracking-[0.2em] text-on-surface-variant">Complete</span>
+</div>
+</div>
+<div class="text-center">
+<p class="text-sm font-semibold mb-1">Optimizing Pixels...</p>
+<p class="text-xs text-on-surface-variant">Estimated time remaining: 12s</p>
+</div>
+</div>
+<!-- Detail Grid -->
+<div class="grid grid-cols-2 gap-4">
+<!-- Engine Info Card -->
+<div class="bg-surface-container-low p-5 rounded-xl flex flex-col gap-3">
+<span class="material-symbols-outlined text-primary text-xl">memory</span>
+<div>
+<p class="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Engine</p>
+<p class="text-sm font-bold">4x Ultra HD</p>
+</div>
+</div>
+<!-- Preview Card -->
+<div class="bg-surface-container-low p-2 rounded-xl flex items-center gap-3 overflow-hidden">
+<div class="w-12 h-12 rounded-lg overflow-hidden bg-surface-container flex-shrink-0">
+<img class="w-full h-full object-cover grayscale opacity-50" data-alt="Abstract vibrant digital art preview" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBfaB1nqeobs9vQVPhXQUkhT2uEfOlZX3gqMdchJbRSK-wDFzqJLj0_KUX08qB1dTu_gLKnPX_54o178kwOkMggsbBq8SU8SIs7oN8vghANzJrCkTgiHQwZuf22YixEcNy18T1WAROkVJDO1k4qP60cgH-47fzA52yu5Uv0R9Jeporh9JaFbqFUxNQiGesbAs7cW5ZQ6C3ndrPG5h8_hDaV3Slfl3jUwPdxKFm-EaIuTfMimUh4o96cfV4sZeVpJoS9Gbrhi8dVWfw"/>
+</div>
+<div class="truncate">
+<p class="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">File</p>
+<p class="text-xs font-bold truncate">IMG_2024.png</p>
+</div>
+</div>
+</div>
+<!-- Task Log -->
+<div class="bg-surface-container p-6 rounded-xl space-y-4">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-3">
+<span class="w-1.5 h-1.5 rounded-full bg-secondary"></span>
+<span class="text-sm font-medium">De-noising layer applied</span>
+</div>
+<span class="text-[10px] text-on-surface-variant">Done</span>
+</div>
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-3">
+<span class="w-1.5 h-1.5 rounded-full bg-secondary"></span>
+<span class="text-sm font-medium">Luminance correction</span>
+</div>
+<span class="text-[10px] text-on-surface-variant">Done</span>
+</div>
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-3">
+<span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+<span class="text-sm font-bold">Sharpening textures...</span>
+</div>
+<span class="text-[10px] text-primary">Active</span>
+</div>
+</div>
+</div>
+<!-- Action Area -->
+<div class="mt-12 flex flex-col gap-4">
+<button class="w-full h-14 rounded-xl signature-glow text-on-primary-fixed font-bold text-sm flex items-center justify-center gap-2 active:scale-[0.98] transition-all">
+<span class="material-symbols-outlined text-lg">bolt</span>
+                Prioritize Task
+            </button>
+<button class="w-full h-14 rounded-xl bg-surface-container-highest text-error font-bold text-sm flex items-center justify-center gap-2 active:scale-[0.98] transition-all border border-error/20">
+<span class="material-symbols-outlined text-lg">close</span>
+                Abort
+            </button>
+</div>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-0 left-0 w-full bg-[#1a1a1a]/70 backdrop-blur-[20px] shadow-[0_-10px_30px_0_rgba(0,0,0,0.5)] z-50 rounded-t-[24px] flex justify-around items-center px-4 pb-6 pt-3">
+<a class="flex flex-col items-center justify-center text-[#adaaaa] hover:text-white transition-all active:scale-90 duration-200" href="#">
+<span class="material-symbols-outlined">home</span>
+<span class="font-manrope text-[10px] font-medium uppercase tracking-widest mt-1">Home</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#9ba8ff] relative after:content-[''] after:absolute after:-bottom-1 after:w-1 after:h-1 after:bg-[#9ba8ff] after:rounded-full transition-all active:scale-90 duration-200" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">sync</span>
+<span class="font-manrope text-[10px] font-medium uppercase tracking-widest mt-1">Processing</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#adaaaa] hover:text-white transition-all active:scale-90 duration-200" href="#">
+<span class="material-symbols-outlined">history</span>
+<span class="font-manrope text-[10px] font-medium uppercase tracking-widest mt-1">History</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#adaaaa] hover:text-white transition-all active:scale-90 duration-200" href="#">
+<span class="material-symbols-outlined">person</span>
+<span class="font-manrope text-[10px] font-medium uppercase tracking-widest mt-1">Profile</span>
+</a>
+</nav>
+</body></html>
