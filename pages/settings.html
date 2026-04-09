@@ -41,8 +41,19 @@
 
       <div class="sidebar-footer">
         <div class="rating">
-          <p>Enjoying AnyPNG?</p>
-          <div class="stars">★★★★★</div>
+          <p id="rating-text">Enjoying AnyPNG?</p>
+          <div class="stars" id="rating-stars">
+            <span class="star" data-value="1">★</span>
+            <span class="star" data-value="2">★</span>
+            <span class="star" data-value="3">★</span>
+            <span class="star" data-value="4">★</span>
+            <span class="star" data-value="5">★</span>
+          </div>
+          <div id="feedback-container" class="hidden">
+            <textarea id="rating-comment" placeholder="Any suggestions to make it better?" class="feedback-input"></textarea>
+            <button id="submit-rating-btn" class="submit-pill">Send Feedback</button>
+          </div>
+          <p id="rating-status" class="status-msg"></p>
         </div>
         <button id="logoutBtn" class="logout-link">Logout</button>
       </div>

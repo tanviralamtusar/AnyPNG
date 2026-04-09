@@ -2,6 +2,8 @@
 const SUPABASE_URL = "https://yknravxmhhwgwccflefc.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlrbnJhdnhtaGh3Z3djY2ZsZWZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDE1NzksImV4cCI6MjA4NzYxNzU3OX0.8crtZn3ZHqqaCg0VKLuhSzjNv0Kxf9vPolAfCwB_edI";
 
+let userRating = 0;
+
 // Load saved settings when the options page opens
 document.addEventListener('DOMContentLoaded', async () => {
     // Tab switching logic
@@ -47,11 +49,125 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         if (data.supabaseSession) {
             await loadProfile(data.supabaseSession);
+            await loadRating(data.supabaseSession);
         } else {
             profileSection.style.display = 'none';
         }
     });
+
+    // Rating Event Listeners
+    const stars = document.querySelectorAll('.star');
+    stars.forEach(star => {
+        star.addEventListener('mouseover', () => {
+            const val = parseInt(star.getAttribute('data-value'));
+            highlightStars(val);
+        });
+        
+        star.addEventListener('mouseout', () => {
+            highlightStars(userRating);
+        });
+        
+        star.addEventListener('click', async () => {
+            userRating = parseInt(star.getAttribute('data-value'));
+            highlightStars(userRating);
+            document.getElementById('feedback-container').classList.remove('hidden');
+            document.getElementById('rating-text').innerText = getRatingMessage(userRating);
+            await saveRating(userRating, null, false); // Auto-save star click
+        });
+    });
+
+    document.getElementById('submit-rating-btn')?.addEventListener('click', async () => {
+        const comment = document.getElementById('rating-comment').value;
+        await saveRating(userRating, comment, true);
+    });
 });
+
+function highlightStars(count) {
+    const stars = document.querySelectorAll('.star');
+    stars.forEach(s => {
+        const val = parseInt(s.getAttribute('data-value'));
+        if (val <= count) {
+            s.classList.add('active');
+        } else {
+            s.classList.remove('active');
+        }
+    });
+}
+
+function getRatingMessage(rating) {
+    if (rating >= 4) return "We're glad you like it! 🚀";
+    if (rating >= 3) return "Thanks for the feedback!";
+    return "How can we improve?";
+}
+
+async function loadRating(session) {
+    try {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/ratings?user_id=eq.${session.user.id}&select=rating,comment`, {
+            headers: {
+                'apikey': SUPABASE_ANON_KEY,
+                'Authorization': `Bearer ${session.access_token}`
+            }
+        });
+        if (res.ok) {
+            const data = await res.json();
+            if (data && data.length > 0) {
+                userRating = data[0].rating;
+                highlightStars(userRating);
+                if (data[0].comment) {
+                    document.getElementById('rating-comment').value = data[0].comment;
+                }
+                document.getElementById('feedback-container').classList.remove('hidden');
+                document.getElementById('rating-text').innerText = getRatingMessage(userRating);
+            }
+        }
+    } catch (e) {
+        console.error('Error loading rating:', e);
+    }
+}
+
+async function saveRating(rating, comment, isExplicit) {
+    const { supabaseSession } = await chrome.storage.local.get('supabaseSession');
+    if (!supabaseSession) return;
+
+    const status = document.getElementById('rating-status');
+    if (isExplicit) status.innerText = 'Saving...';
+
+    try {
+        const payload = { 
+            user_id: supabaseSession.user.id, 
+            rating: rating
+        };
+        if (comment !== null) payload.comment = comment;
+
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/ratings`, {
+            method: 'POST',
+            headers: {
+                'apikey': SUPABASE_ANON_KEY,
+                'Authorization': `Bearer ${supabaseSession.access_token}`,
+                'Content-Type': 'application/json',
+                'Prefer': 'resolution=merge-duplicates'
+            },
+            body: JSON.stringify(payload)
+        });
+
+        if (res.ok) {
+            if (isExplicit) {
+                status.innerText = 'Saved! Thank you for the support.';
+                status.style.color = 'var(--success)';
+                setTimeout(() => { status.innerText = ''; }, 3000);
+            }
+        } else {
+            const err = await res.json();
+            throw new Error(err.message || 'Failed to save');
+        }
+    } catch (e) {
+        if (isExplicit) {
+            status.innerText = 'Error saving rating.';
+            status.style.color = 'var(--error)';
+        }
+        console.error('Rating save error:', e);
+    }
+}
 
 async function loadProfile(session) {
     const userId = session.user.id;

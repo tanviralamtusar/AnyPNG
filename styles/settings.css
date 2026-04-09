@@ -94,9 +94,65 @@ body {
 }
 
 .stars {
+  color: #3f3f46;
+  font-size: 18px;
+  margin-bottom: 12px;
+  display: flex;
+  gap: 4px;
+}
+
+.star {
+  cursor: pointer;
+  transition: transform 0.2s, color 0.2s;
+}
+
+.star:hover {
+  transform: scale(1.2);
+}
+
+.star.active, .star.hover {
   color: #fbbf24;
-  font-size: 16px;
-  margin-bottom: 20px;
+}
+
+.feedback-input {
+  width: calc(100% - 16px);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  color: #fff;
+  font-size: 12px;
+  padding: 8px;
+  margin-bottom: 8px;
+  resize: none;
+  height: 60px;
+  outline: none;
+}
+
+.feedback-input:focus {
+  border-color: var(--primary);
+}
+
+.submit-pill {
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.2s;
+  margin-bottom: 16px;
+}
+
+.submit-pill:hover {
+  transform: scale(1.05);
+}
+
+.rating .status-msg {
+  font-size: 11px;
+  margin-top: -8px;
+  margin-bottom: 8px;
 }
 
 .logout-link {
