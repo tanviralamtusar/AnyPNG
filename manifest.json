@@ -31,9 +31,9 @@
   "action": { "default_popup": "pages/popup.html" },
   "options_page": "pages/settings.html",
   "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
+    "16": "icons/Anypng.png",
+    "48": "icons/Anypng.png",
+    "128": "icons/Anypng.png"
   },
   "web_accessible_resources": [
     { "resources": ["pages/offscreen.html", "scripts/offscreen.js"], "matches": ["<all_urls>"] }
