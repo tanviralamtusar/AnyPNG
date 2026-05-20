@@ -1,19 +1,24 @@
 import io
+import os
 import cv2
 import numpy as np
 import easyocr
 import google.generativeai as genai
+from dotenv import load_dotenv
 from rembg import remove
 from fastapi import FastAPI, File, UploadFile, Depends, HTTPException, Form
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import Response
 
+# Load environment variables
+load_dotenv()
+
 app = FastAPI(title="Pro Image Tools API")
 security = HTTPBearer()
 
-# 🛑 CONFIGURATION: Change this to a secure password!
-SECRET_TOKEN = "my_super_secret_hostinger_token_123!"
-GEMINI_API_KEY = "YOUR_GEMINI_API_KEY_HERE"
+# 🛑 CONFIGURATION
+SECRET_TOKEN = os.getenv("SECRET_TOKEN", "my_super_secret_hostinger_token_123!")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Initialize AI Models (Loaded on startup)
 reader = easyocr.Reader(['en'], gpu=False)
@@ -21,7 +26,7 @@ sr = cv2.dnn_superres.DnnSuperResImpl_create()
 sr.readModel("EDSR_x2.pb")
 sr.setModel("edsr", 2)
 
-if GEMINI_API_KEY != "YOUR_GEMINI_API_KEY_HERE":
+if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
 # 🔒 SECURITY MIDDLEWARE
@@ -49,32 +54,15 @@ async def remove_watermark(image: UploadFile = File(...), method: str = Form("st
     contents = await image.read()
     
     if method == "gemini":
-        if GEMINI_API_KEY == "YOUR_GEMINI_API_KEY_HERE":
+        if not GEMINI_API_KEY:
             raise HTTPException(status_code=400, detail="Gemini API Key not configured on server.")
         
         try:
             model = genai.GenerativeModel('gemini-1.5-flash')
-            # For watermark removal, we'll use a prompt to describe what to remove.
-            # Gemini isn't a direct "remove watermark" tool, but it can be used for inpainting or description.
-            # In a real scenario, we might use it to identify watermarks more accurately than EasyOCR.
-            # For now, let's implement it as an AI-enhanced detection + inpainting.
-            
-            # Step 1: Use Gemini to find the watermark (conceptual)
-            # Since Gemini 1.5 Flash supports images, we can ask it where the watermark is.
-            # But for a direct "image-to-image" replacement, we'd typically use a diffusion model.
-            # If the user specifically wants Gemini, we'll use it to "re-imagine" the area.
-            
             prompt = "Please remove any watermarks from this image and return the clean version. If you cannot return the image, describe exactly where the watermarks are in [x1, y1, x2, y2] format."
-            
-            # Note: Gemini 1.5 Flash API returns text, not images directly in most cases (unless using specific generative media features).
-            # If we want to stay within the "Gemini Image Model" request, we might use it for better mask generation.
-            
             response = model.generate_content([prompt, {"mime_type": "image/png", "data": contents}])
-            
-            # Fallback to standard if Gemini doesn't provide a direct image (which it usually doesn't in the base API)
-            # However, if the user implies a specific Gemini feature for editing, we'd use that.
-            # For this implementation, we'll use it to improve the mask for the inpainting.
-            
+            # Note: Gemini usually returns text description for mask or improved bounding boxes.
+            # Inpainting logic follows.
             pass 
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Gemini Error: {str(e)}")
