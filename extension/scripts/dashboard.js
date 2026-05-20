@@ -235,6 +235,8 @@ loadTheme();
 // Popup Watermark Handlers
 document.getElementById('popup-retry').onclick = async () => {
     const prompt = document.getElementById('popup-prompt').value;
+    const methodEl = document.querySelector('input[name="watermark-method"]:checked');
+    const method = methodEl ? methodEl.value : "standard";
     
     // Clear error message
     document.getElementById('error-msg').innerText = "";
@@ -244,13 +246,13 @@ document.getElementById('popup-retry').onclick = async () => {
     document.getElementById('processing-container').classList.remove('hidden');
     document.querySelector('.progress-percentage').innerText = "0%";
     document.querySelector('.progress-ring-fill').style.strokeDashoffset = "339.292";
-    document.querySelector('.processing-status-text').innerText = "Starting...";
+    document.querySelector('.processing-status-text').innerText = method === "gemini" ? "Consulting Gemini..." : "Starting...";
     document.getElementById('popup-retry').disabled = true;
     document.getElementById('popup-download').disabled = true;
     document.getElementById('popup-placeholder').classList.add('hidden');
     
     await chrome.storage.local.set({ watermarkProcessing: true });
-    chrome.runtime.sendMessage({ action: "RETRY_WATERMARK", prompt: prompt });
+    chrome.runtime.sendMessage({ action: "RETRY_WATERMARK", prompt: prompt, method: method });
 };
 
 document.getElementById('popup-download').onclick = () => {

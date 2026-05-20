@@ -180,7 +180,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 });
 
 // Helper Function specifically for the Watermark API
-async function callWatermarkBackend(prompt, token) {
+async function callWatermarkBackend(prompt, token, method = "standard") {
     let blobToProcess = cachedImageBlob;
 
     // If service worker restarted, try to load from storage
@@ -198,6 +198,7 @@ async function callWatermarkBackend(prompt, token) {
     const formData = new FormData();
     formData.append('image', blobToProcess);
     formData.append('prompt', prompt);
+    formData.append('method', method);
 
     try {
         const apiRes = await fetch(`${API_CONFIG.url}/remove-watermark`, {
@@ -256,7 +257,8 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
         const supabaseSession = await getValidSession();
         if (supabaseSession) {
             const prompt = message.prompt || DEFAULT_PROMPT;
-            await callWatermarkBackend(prompt, supabaseSession.access_token);
+            const method = message.method || "standard";
+            await callWatermarkBackend(prompt, supabaseSession.access_token, method);
         }
     } else if (message.action === "DOWNLOAD_RESULT") {
         chrome.downloads.download({ url: message.url, filename: `AnyPNG_Pro_Cleaned_${Date.now()}.png` });
