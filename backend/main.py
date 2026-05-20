@@ -3,7 +3,9 @@ import os
 import cv2
 import numpy as np
 import easyocr
-import google.generativeai as genai
+import base64
+from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 from rembg import remove
 from fastapi import FastAPI, File, UploadFile, Depends, HTTPException, Form
@@ -26,8 +28,13 @@ sr = cv2.dnn_superres.DnnSuperResImpl_create()
 sr.readModel("EDSR_x2.pb")
 sr.setModel("edsr", 2)
 
+# Initialize GenAI Client
+client = None
 if GOOGLE_CLOUD_API_KEY:
-    genai.configure(api_key=GOOGLE_CLOUD_API_KEY)
+    client = genai.Client(
+        vertexai=True,
+        api_key=GOOGLE_CLOUD_API_KEY,
+    )
 
 # 🔒 SECURITY MIDDLEWARE
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -54,16 +61,61 @@ async def remove_watermark(image: UploadFile = File(...), method: str = Form("st
     contents = await image.read()
     
     if method == "gemini":
-        if not GOOGLE_CLOUD_API_KEY:
+        if not client:
             raise HTTPException(status_code=400, detail="Google Cloud API Key not configured on server.")
         
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            prompt = "Please remove any watermarks from this image and return the clean version. If you cannot return the image, describe exactly where the watermarks are in [x1, y1, x2, y2] format."
-            response = model.generate_content([prompt, {"mime_type": "image/png", "data": contents}])
-            # Note: Gemini usually returns text description for mask or improved bounding boxes.
-            # Inpainting logic follows.
-            pass 
+            model = "gemini-3.1-flash-image-preview"
+            
+            # Prepare contents for the new SDK
+            genai_contents = [
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_bytes(data=contents, mime_type="image/png"),
+                        types.Part.from_text(text="recreate this image exactly same.")
+                    ]
+                ),
+            ]
+
+            generate_content_config = types.GenerateContentConfig(
+                temperature=1,
+                top_p=0.95,
+                max_output_tokens=32768,
+                response_modalities=["IMAGE"],
+                safety_settings=[
+                    types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="OFF"),
+                    types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="OFF"),
+                    types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="OFF"),
+                    types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="OFF")
+                ],
+                system_instruction=[types.Part.from_text(text="don't change anything or don't add anything extra.")],
+                image_config=types.ImageConfig(
+                    aspect_ratio="auto",
+                    image_size="1K",
+                    output_mime_type="image/png",
+                ),
+                thinking_config=types.ThinkingConfig(
+                    thinking_level="MINIMAL",
+                ),
+            )
+
+            response = client.models.generate_content(
+                model=model,
+                contents=genai_contents,
+                config=generate_content_config,
+            )
+
+            # Extract the generated image from response parts
+            for part in response.candidates[0].content.parts:
+                if part.inline_data:
+                    return Response(content=part.inline_data.data, media_type="image/png")
+                elif part.file_data:
+                    # In case it returns a reference (less likely for inline output)
+                    pass
+
+            raise HTTPException(status_code=500, detail="No image generated in response.")
+
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"AI Error: {str(e)}")
 

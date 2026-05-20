@@ -4,5 +4,5 @@ python-multipart
 opencv-python-headless
 easyocr
 rembg
-google-generativeai
+google-genai
 python-dotenv
