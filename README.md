@@ -2,7 +2,7 @@
 
 **AnyPNG** is a professional Chrome Extension that gives you a powerful AI-driven image toolset directly in your browser's right-click menu. Upscale images, remove backgrounds, or erase watermarks instantly using your own self-hosted AI backend.
 
-![AnyPNG Branding](icons/icon128.png)
+![AnyPNG Branding](extension/icons/icon128.png)
 
 ## ✨ Features
 
