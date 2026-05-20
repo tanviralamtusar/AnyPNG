@@ -18,7 +18,7 @@ security = HTTPBearer()
 
 # 🛑 CONFIGURATION
 SECRET_TOKEN = os.getenv("SECRET_TOKEN", "my_super_secret_hostinger_token_123!")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GOOGLE_CLOUD_API_KEY = os.getenv("GOOGLE_CLOUD_API_KEY")
 
 # Initialize AI Models (Loaded on startup)
 reader = easyocr.Reader(['en'], gpu=False)
@@ -26,8 +26,8 @@ sr = cv2.dnn_superres.DnnSuperResImpl_create()
 sr.readModel("EDSR_x2.pb")
 sr.setModel("edsr", 2)
 
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+if GOOGLE_CLOUD_API_KEY:
+    genai.configure(api_key=GOOGLE_CLOUD_API_KEY)
 
 # 🔒 SECURITY MIDDLEWARE
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -54,8 +54,8 @@ async def remove_watermark(image: UploadFile = File(...), method: str = Form("st
     contents = await image.read()
     
     if method == "gemini":
-        if not GEMINI_API_KEY:
-            raise HTTPException(status_code=400, detail="Gemini API Key not configured on server.")
+        if not GOOGLE_CLOUD_API_KEY:
+            raise HTTPException(status_code=400, detail="Google Cloud API Key not configured on server.")
         
         try:
             model = genai.GenerativeModel('gemini-1.5-flash')
@@ -65,7 +65,7 @@ async def remove_watermark(image: UploadFile = File(...), method: str = Form("st
             # Inpainting logic follows.
             pass 
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Gemini Error: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"AI Error: {str(e)}")
 
     # Standard / Fallback logic
     np_arr = np.frombuffer(contents, np.uint8)
