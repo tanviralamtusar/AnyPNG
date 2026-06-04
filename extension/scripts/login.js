@@ -64,7 +64,7 @@ document.getElementById('login-btn').onclick = async () => {
         
         await chrome.storage.local.set({ supabaseSession: data });
         // After successful login, navigate back to popup dashboard logic
-        window.location.href = "popup.html"; 
+        window.location.href = "dashboard.html";
     } catch (err) {
         if (err.name === 'TypeError' && err.message.includes('fetch')) {
             errorMsg.innerText = "Network error. Please check your connection.";

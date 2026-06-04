@@ -106,7 +106,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             const base64Original = await blobToDataUrl(cachedImageBlob);
             await chrome.storage.local.set({ lastOriginalImage: base64Original });
 
-            await callWatermarkBackend(DEFAULT_PROMPT, supabaseSession.access_token);
+            await callWatermarkBackend(DEFAULT_PROMPT, API_CONFIG.basicToken);
         } catch (e) {
             chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Error', message: "Failed to fetch image: " + e.message });
         }
@@ -180,7 +180,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 });
 
 // Helper Function specifically for the Watermark API
-async function callWatermarkBackend(prompt, token, method = "standard") {
+async function callWatermarkBackend(prompt, _token, method = "standard") {
     let blobToProcess = cachedImageBlob;
 
     // If service worker restarted, try to load from storage
@@ -203,7 +203,7 @@ async function callWatermarkBackend(prompt, token, method = "standard") {
     try {
         const apiRes = await fetch(`${API_CONFIG.url}/remove-watermark`, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${token}` }, // Uses Supabase JWT securely!
+            headers: { 'Authorization': `Bearer ${API_CONFIG.basicToken}` },
             body: formData
         });
 
@@ -225,25 +225,20 @@ async function callWatermarkBackend(prompt, token, method = "standard") {
         });
 
     } catch (error) {
-        await chrome.storage.local.set({ watermarkProcessing: false });
-        
         let userMessage = error.message || "Unknown error";
         const lowerMsg = userMessage.toLowerCase();
-        
-        // Check for model/image input errors
-        if (lowerMsg.includes("does not support image") || 
-            lowerMsg.includes("cannot read image") || 
+
+        if (lowerMsg.includes("does not support image") ||
+            lowerMsg.includes("cannot read image") ||
             lowerMsg.includes("image input") ||
-            lowerMsg.includes("model") && lowerMsg.includes("image")) {
+            (lowerMsg.includes("model") && lowerMsg.includes("image"))) {
             userMessage = "This image format is not supported. Please try a different image (PNG, JPG, or WebP recommended).";
         } else if (lowerMsg.includes("failed to fetch") || lowerMsg.includes("network")) {
             userMessage = "Network error. Please check your connection and try again.";
         }
-        
+
         console.error("Watermark API Error:", error);
-        
-        // Clear processing state and notify UI
-        await chrome.storage.local.remove('watermarkProcessing');
+        await chrome.storage.local.set({ watermarkProcessing: false });
         
         chrome.runtime.sendMessage({ action: "SHOW_ERROR", error: userMessage }).catch(() => {
             chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Error', message: userMessage });
@@ -258,7 +253,7 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
         if (supabaseSession) {
             const prompt = message.prompt || DEFAULT_PROMPT;
             const method = message.method || "standard";
-            await callWatermarkBackend(prompt, supabaseSession.access_token, method);
+            await callWatermarkBackend(prompt, null, method);
         }
     } else if (message.action === "DOWNLOAD_RESULT") {
         chrome.downloads.download({ url: message.url, filename: `AnyPNG_Pro_Cleaned_${Date.now()}.png` });

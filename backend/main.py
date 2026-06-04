@@ -58,8 +58,11 @@ async def upscale_image(image: UploadFile = File(...)):
 
 @app.post("/remove-watermark", dependencies=[Depends(verify_token)])
 async def remove_watermark(image: UploadFile = File(...), method: str = Form("standard")):
+    if method not in ("standard", "gemini"):
+        raise HTTPException(status_code=400, detail="Invalid method. Use 'standard' or 'gemini'.")
+
     contents = await image.read()
-    
+
     if method == "gemini":
         if not client:
             raise HTTPException(status_code=400, detail="Google Cloud API Key not configured on server.")

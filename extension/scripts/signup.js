@@ -84,7 +84,7 @@ document.getElementById('signup-btn').onclick = async () => {
         
         await chrome.storage.local.set({ supabaseSession: data });
         // After successful signup with token, navigate to popup dashboard
-        window.location.href = "popup.html"; 
+        window.location.href = "dashboard.html";
     } catch (err) {
         errorMsg.style.color = "var(--error)";
         errorMsg.style.background = "rgba(239, 68, 68, 0.1)";
