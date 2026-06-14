@@ -20,7 +20,8 @@ security = HTTPBearer()
 
 # 🛑 CONFIGURATION
 SECRET_TOKEN = os.getenv("SECRET_TOKEN", "my_super_secret_hostinger_token_123!")
-GOOGLE_CLOUD_API_KEY = os.getenv("GOOGLE_CLOUD_API_KEY")
+GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
+GOOGLE_CLOUD_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 
 # Initialize AI Models (Loaded on startup)
 reader = easyocr.Reader(['en'], gpu=False)
@@ -28,12 +29,13 @@ sr = cv2.dnn_superres.DnnSuperResImpl_create()
 sr.readModel("EDSR_x2.pb")
 sr.setModel("edsr", 2)
 
-# Initialize GenAI Client
+# Initialize Vertex AI GenAI Client
 client = None
-if GOOGLE_CLOUD_API_KEY:
+if GOOGLE_CLOUD_PROJECT:
     client = genai.Client(
         vertexai=True,
-        api_key=GOOGLE_CLOUD_API_KEY,
+        project=GOOGLE_CLOUD_PROJECT,
+        location=GOOGLE_CLOUD_LOCATION,
     )
 
 # 🔒 SECURITY MIDDLEWARE
@@ -65,7 +67,7 @@ async def remove_watermark(image: UploadFile = File(...), method: str = Form("st
 
     if method == "gemini":
         if not client:
-            raise HTTPException(status_code=400, detail="Google Cloud API Key not configured on server.")
+            raise HTTPException(status_code=400, detail="GOOGLE_CLOUD_PROJECT not configured on server.")
 
         try:
             model = "gemini-2.0-flash-preview-image-generation"
