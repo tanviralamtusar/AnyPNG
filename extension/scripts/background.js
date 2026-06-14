@@ -106,7 +106,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             const base64Original = await blobToDataUrl(cachedImageBlob);
             await chrome.storage.local.set({ lastOriginalImage: base64Original });
 
-            await callWatermarkBackend(DEFAULT_PROMPT, API_CONFIG.basicToken);
+            await callWatermarkBackend(DEFAULT_PROMPT, API_CONFIG.basicToken, "gemini");
         } catch (e) {
             chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Error', message: "Failed to fetch image: " + e.message });
         }
