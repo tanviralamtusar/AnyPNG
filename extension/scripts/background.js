@@ -106,7 +106,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             const base64Original = await blobToDataUrl(cachedImageBlob);
             await chrome.storage.local.set({ lastOriginalImage: base64Original });
 
-            await callWatermarkBackend(DEFAULT_PROMPT, API_CONFIG.basicToken, "gemini");
+            await callWatermarkBackend(DEFAULT_PROMPT, supabaseSession, "gemini");
         } catch (e) {
             chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Error', message: "Failed to fetch image: " + e.message });
         }
@@ -179,8 +179,28 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     }
 });
 
+// Extract the Supabase access token from a session object (handles nested formats)
+function getAccessToken(session) {
+    if (!session) return null;
+    if (session.access_token) return session.access_token;
+    if (session.session && session.session.access_token) return session.session.access_token;
+    return null;
+}
+
 // Helper Function specifically for the Watermark API
-async function callWatermarkBackend(prompt, _token, method = "standard") {
+async function callWatermarkBackend(prompt, session, method = "standard") {
+    // The deployed /remove-watermark endpoint authenticates the user via their
+    // Supabase session JWT (to identify the account and deduct credits) — not the
+    // static basic token. Use the access token from the already-validated session.
+    const accessToken = getAccessToken(session);
+    if (!accessToken) {
+        await chrome.storage.local.set({ watermarkProcessing: false });
+        chrome.runtime.sendMessage({ action: "SHOW_ERROR", error: "Session expired. Please open AnyPNG and log in again." }).catch(() => {
+            chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Login Required', message: 'Please open AnyPNG and log in again.' });
+        });
+        return;
+    }
+
     let blobToProcess = cachedImageBlob;
 
     // If service worker restarted, try to load from storage
@@ -203,7 +223,7 @@ async function callWatermarkBackend(prompt, _token, method = "standard") {
     try {
         const apiRes = await fetch(`${API_CONFIG.url}/remove-watermark`, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${API_CONFIG.basicToken}` },
+            headers: { 'Authorization': `Bearer ${accessToken}` },
             body: formData
         });
 
@@ -253,7 +273,7 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
         if (supabaseSession) {
             const prompt = message.prompt || DEFAULT_PROMPT;
             const method = message.method || "standard";
-            await callWatermarkBackend(prompt, null, method);
+            await callWatermarkBackend(prompt, supabaseSession, method);
         }
     } else if (message.action === "DOWNLOAD_RESULT") {
         chrome.downloads.download({ url: message.url, filename: `AnyPNG_Pro_Cleaned_${Date.now()}.png` });
