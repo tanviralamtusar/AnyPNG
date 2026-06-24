@@ -282,7 +282,7 @@ document.getElementById('themeToggle').addEventListener('change', async (e) => {
 
 // 🔒 HARDCODED API CREDENTIALS (Matches background.js)
 const API_CONFIG = {
-    url: "https://png.botbhai.net",
+    url: "https://anypng.botbhai.net",
     basicToken: "my_super_secret_hostinger_token_123!"
 };
 

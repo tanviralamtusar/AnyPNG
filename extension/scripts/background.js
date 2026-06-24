@@ -9,7 +9,7 @@ chrome.runtime.onInstalled.addListener(() => {
 
 // 🔒 API CONFIGURATION
 const API_CONFIG = {
-    url: "https://png.botbhai.net",
+    url: "https://anypng.botbhai.net",
     basicToken: "my_super_secret_hostinger_token_123!"
 };
 
