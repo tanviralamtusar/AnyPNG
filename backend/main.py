@@ -20,6 +20,7 @@ security = HTTPBearer()
 
 # 🛑 CONFIGURATION
 SECRET_TOKEN = os.getenv("SECRET_TOKEN", "my_super_secret_hostinger_token_123!")
+VERTEX_API_KEY = os.getenv("VERTEX_API_KEY")
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
 GOOGLE_CLOUD_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 
@@ -30,8 +31,12 @@ sr.readModel("EDSR_x2.pb")
 sr.setModel("edsr", 2)
 
 # Initialize Vertex AI GenAI Client
+# Express mode: authenticate with an API key (no project/location/ADC needed).
+# Standard mode: fall back to project + location using Application Default Credentials.
 client = None
-if GOOGLE_CLOUD_PROJECT:
+if VERTEX_API_KEY:
+    client = genai.Client(vertexai=True, api_key=VERTEX_API_KEY)
+elif GOOGLE_CLOUD_PROJECT:
     client = genai.Client(
         vertexai=True,
         project=GOOGLE_CLOUD_PROJECT,
@@ -67,7 +72,7 @@ async def remove_watermark(image: UploadFile = File(...), method: str = Form("st
 
     if method == "gemini":
         if not client:
-            raise HTTPException(status_code=400, detail="GOOGLE_CLOUD_PROJECT not configured on server.")
+            raise HTTPException(status_code=400, detail="Vertex AI not configured on server. Set VERTEX_API_KEY (express mode) or GOOGLE_CLOUD_PROJECT.")
 
         try:
             model = "gemini-2.0-flash-preview-image-generation"
