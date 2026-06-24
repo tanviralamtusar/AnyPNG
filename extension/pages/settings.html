@@ -80,6 +80,21 @@
 
         <div class="setting-row">
           <div class="setting-info">
+            <label>AI Model</label>
+            <p class="description">Model used for AI watermark removal. Newer models may give better results.</p>
+          </div>
+          <div class="setting-control">
+            <div class="select-wrapper">
+              <select id="aiModel">
+                <option value="gemini-2.0-flash-preview-image-generation">Gemini 2.0 Flash (Default)</option>
+                <option value="gemini-2.5-flash-image-preview">Gemini 2.5 Flash Image (Latest)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
             <label>Advanced AI Prompt</label>
             <p class="description">Allows you to provide custom context when removing watermarks.</p>
           </div>

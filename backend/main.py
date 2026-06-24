@@ -24,6 +24,14 @@ VERTEX_API_KEY = os.getenv("VERTEX_API_KEY")
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
 GOOGLE_CLOUD_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 
+# AI image models the client is allowed to request for watermark removal.
+# Keep this list in sync with the dropdown in extension/pages/settings.html.
+DEFAULT_AI_MODEL = "gemini-2.0-flash-preview-image-generation"
+ALLOWED_AI_MODELS = {
+    "gemini-2.0-flash-preview-image-generation",
+    "gemini-2.5-flash-image-preview",
+}
+
 # Initialize AI Models (Loaded on startup)
 reader = easyocr.Reader(['en'], gpu=False)
 sr = cv2.dnn_superres.DnnSuperResImpl_create()
@@ -64,9 +72,18 @@ async def upscale_image(image: UploadFile = File(...)):
     return Response(content=encoded_img.tobytes(), media_type="image/png")
 
 @app.post("/remove-watermark", dependencies=[Depends(verify_token)])
-async def remove_watermark(image: UploadFile = File(...), method: str = Form("standard")):
+async def remove_watermark(
+    image: UploadFile = File(...),
+    method: str = Form("standard"),
+    model: str = Form(DEFAULT_AI_MODEL),
+):
     if method not in ("standard", "gemini"):
         raise HTTPException(status_code=400, detail="Invalid method. Use 'standard' or 'gemini'.")
+
+    # Ignore unknown/unsupported model values and fall back to the default
+    # so a stale or tampered client setting can't break the request.
+    if model not in ALLOWED_AI_MODELS:
+        model = DEFAULT_AI_MODEL
 
     contents = await image.read()
 
@@ -75,8 +92,6 @@ async def remove_watermark(image: UploadFile = File(...), method: str = Form("st
             raise HTTPException(status_code=400, detail="Vertex AI not configured on server. Set VERTEX_API_KEY (express mode) or GOOGLE_CLOUD_PROJECT.")
 
         try:
-            model = "gemini-2.0-flash-preview-image-generation"
-
             # Detect mime type
             mime_type = image.content_type or "image/png"
             if mime_type not in ("image/png", "image/jpeg", "image/webp"):

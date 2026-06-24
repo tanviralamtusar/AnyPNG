@@ -215,10 +215,15 @@ async function callWatermarkBackend(prompt, session, method = "standard") {
         }
     }
 
+    // The AI model is a user setting; only relevant for the "gemini" method.
+    // The backend validates it against an allowlist and falls back if unknown.
+    const { aiModel } = await chrome.storage.sync.get('aiModel');
+
     const formData = new FormData();
     formData.append('image', blobToProcess);
     formData.append('prompt', prompt);
     formData.append('method', method);
+    if (aiModel) formData.append('model', aiModel);
 
     try {
         const apiRes = await fetch(`${API_CONFIG.url}/remove-watermark`, {

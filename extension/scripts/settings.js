@@ -29,12 +29,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // Load sync settings
-    chrome.storage.sync.get(['upscaleFactor', 'enableAdvancedPrompt'], (result) => {
+    chrome.storage.sync.get(['upscaleFactor', 'enableAdvancedPrompt', 'aiModel'], (result) => {
         if (result.upscaleFactor) {
             document.getElementById('upscaleFactor').value = result.upscaleFactor;
         }
         if (result.enableAdvancedPrompt !== undefined) {
             document.getElementById('enableAdvancedPrompt').checked = result.enableAdvancedPrompt;
+        }
+        if (result.aiModel) {
+            document.getElementById('aiModel').value = result.aiModel;
         }
     });
 
@@ -318,8 +321,9 @@ document.getElementById('testBtn').addEventListener('click', async () => {
 document.getElementById('saveBtn').addEventListener('click', () => {
     const upscaleFactor = document.getElementById('upscaleFactor').value;
     const enableAdvancedPrompt = document.getElementById('enableAdvancedPrompt').checked;
+    const aiModel = document.getElementById('aiModel').value;
 
-    chrome.storage.sync.set({ upscaleFactor, enableAdvancedPrompt }, () => {
+    chrome.storage.sync.set({ upscaleFactor, enableAdvancedPrompt, aiModel }, () => {
         const status = document.getElementById('status');
         status.classList.add('show');
 
