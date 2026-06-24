@@ -1,7 +1,5 @@
 fastapi
 uvicorn
 python-multipart
-easyocr
-rembg
 google-genai
 python-dotenv
