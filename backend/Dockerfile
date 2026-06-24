@@ -17,9 +17,17 @@ RUN apt-get update && apt-get install -y \
 # Download the EDSR 2x Upscaling Model directly into the image
 RUN wget https://github.com/Saafke/EDSR_Tensorflow/raw/master/models/EDSR_x2.pb
 
-# Copy requirements and install them
+# Install CPU-only PyTorch FIRST so easyocr reuses it instead of pulling the
+# ~2-3 GB CUDA build (nvidia-* wheels) we don't need on a CPU server.
+RUN pip install --no-cache-dir torch torchvision \
+    --index-url https://download.pytorch.org/whl/cpu
+
+# Copy requirements and install them. rembg pulls in opencv-python-headless;
+# we reinstall opencv-contrib-python-headless LAST so its cv2 (which includes
+# the dnn_superres module used for EDSR upscaling) is the one that wins.
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir --force-reinstall opencv-contrib-python-headless
 
 # Copy your application code
 COPY main.py .
