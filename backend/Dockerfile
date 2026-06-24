@@ -29,6 +29,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir --force-reinstall opencv-contrib-python-headless
 
+# Pre-download the EasyOCR models at build time so the container does not need
+# network access on startup (otherwise easyocr.Reader() downloads ~64 MB on the
+# first run, which crash-loops in a locked-down container).
+RUN python -c "import easyocr; easyocr.Reader(['en'], gpu=False)"
+
 # Copy your application code
 COPY main.py .
 
