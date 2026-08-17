@@ -28,6 +28,12 @@ chrome.runtime.onInstalled.addListener(() => {
     });
 });
 
+// Bare relative iconUrl strings ("icons/icon48.png") resolve unreliably for
+// chrome.notifications.create() from an MV3 service worker (intermittent
+// "Unable to download all specified images" errors) — use an explicit
+// chrome-extension:// URL instead.
+const ICON_URL = chrome.runtime.getURL('icons/icon48.png');
+
 // 🔒 API CONFIGURATION
 const API_CONFIG = {
     url: "https://anypng.botbhai.net",
@@ -93,7 +99,7 @@ async function setupOffscreenDocument(path) {
 
 function toggleLoadingScreen(tabId, show, text = "") {
     chrome.tabs.sendMessage(tabId, { action: show ? "SHOW_LOADING" : "HIDE_LOADING", text: text })
-        .catch(() => { if (show) chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'AnyPNG', message: text }); });
+        .catch(() => { if (show) chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'AnyPNG', message: text }); });
 }
 
 // ==========================================================
@@ -291,7 +297,7 @@ async function resolveVideoDownload(tab, quality, pageUrlOverride) {
     const pageUrl = pageUrlOverride || tab.url;
     const platform = detectVideoPlatform(pageUrl);
     if (!platform) {
-        chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'AnyPNG', message: 'This page is not a supported video platform (YouTube, Instagram, Facebook, TikTok).' });
+        chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'AnyPNG', message: 'This page is not a supported video platform (YouTube, Instagram, Facebook, TikTok).' });
         return;
     }
 
@@ -346,7 +352,7 @@ async function resolveVideoDownload(tab, quality, pageUrlOverride) {
         await downloadViaBackend(tab, quality, platform);
 
     } catch (error) {
-        chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Video Download Failed', message: error.message });
+        chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Video Download Failed', message: error.message });
     } finally {
         toggleLoadingScreen(tab.id, false);
     }
@@ -361,14 +367,14 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (info.menuItemId === "watermark_png") {
         const supabaseSession = await getValidSession();
         if (!supabaseSession) {
-            chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Login Required', message: 'Please click the AnyPNG icon in your toolbar to Login first!' });
+            chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Login Required', message: 'Please click the AnyPNG icon in your toolbar to Login first!' });
             return;
         }
 
         currentTabId = tab.id;
 
         // Notify user that processing started
-        chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'AnyPNG Processing', message: 'Removing watermark... Please wait.' });
+        chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'AnyPNG Processing', message: 'Removing watermark... Please wait.' });
         await chrome.storage.local.set({ watermarkProcessing: true });
         chrome.runtime.sendMessage({ action: "PROCESSING_WATERMARK" }).catch(() => { });
 
@@ -385,7 +391,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
             await callWatermarkBackend(DEFAULT_PROMPT, supabaseSession, "gemini");
         } catch (e) {
-            chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Error', message: "Failed to fetch image: " + e.message });
+            chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Error', message: "Failed to fetch image: " + e.message });
         }
     }
 
@@ -424,7 +430,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
                 chrome.downloads.download({ url: downloadUrl, filename: `${prefix}_${Date.now()}.png` });
 
             } catch (error) {
-                chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Failed', message: error.message });
+                chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Failed', message: error.message });
             } finally {
                 toggleLoadingScreen(tab.id, false);
             }
@@ -449,7 +455,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             chrome.downloads.download({ url: `data:image/png;base64,${result.data}`, filename: `AnyPNG_Converted_${Date.now()}.png` });
 
         } catch (error) {
-            chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Conversion Failed', message: error.message });
+            chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Conversion Failed', message: error.message });
         } finally {
             toggleLoadingScreen(tab.id, false);
         }
@@ -460,14 +466,14 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     // ==========================================
     else if (info.menuItemId === "download_video") {
         if (!info.srcUrl) {
-            chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Download Failed', message: 'No video source found on this element.' });
+            chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Download Failed', message: 'No video source found on this element.' });
             return;
         }
 
         // blob:/mediasource: URLs are scoped to the page and can't be resolved
         // from the background service worker, so a direct download won't work.
         if (info.srcUrl.startsWith('blob:') || info.srcUrl.startsWith('mediasource:')) {
-            chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Unsupported Video', message: 'This video is streamed (blob URL) and cannot be downloaded directly.' });
+            chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Unsupported Video', message: 'This video is streamed (blob URL) and cannot be downloaded directly.' });
             return;
         }
 
@@ -477,7 +483,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
         chrome.downloads.download({ url: info.srcUrl, filename: `AnyPNG_Video_${Date.now()}.${ext}` }, () => {
             if (chrome.runtime.lastError) {
-                chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Download Failed', message: chrome.runtime.lastError.message });
+                chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Download Failed', message: chrome.runtime.lastError.message });
             }
         });
     }
@@ -508,7 +514,7 @@ async function callWatermarkBackend(prompt, session, method = "standard") {
     if (!accessToken) {
         await chrome.storage.local.set({ watermarkProcessing: false });
         chrome.runtime.sendMessage({ action: "SHOW_ERROR", error: "Session expired. Please open AnyPNG and log in again." }).catch(() => {
-            chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Login Required', message: 'Please open AnyPNG and log in again.' });
+            chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Login Required', message: 'Please open AnyPNG and log in again.' });
         });
         return;
     }
@@ -558,7 +564,7 @@ async function callWatermarkBackend(prompt, session, method = "standard") {
         // Notify popup if it's open
         chrome.runtime.sendMessage({ action: "UPDATE_PREVIEW", image: base64Data }).catch(() => {
             // If popup is closed, just show a notification
-            chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Watermark Removed!', message: 'Click the AnyPNG icon to view the result.' });
+            chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Watermark Removed!', message: 'Click the AnyPNG icon to view the result.' });
         });
 
     } catch (error) {
@@ -578,7 +584,7 @@ async function callWatermarkBackend(prompt, session, method = "standard") {
         await chrome.storage.local.set({ watermarkProcessing: false });
         
         chrome.runtime.sendMessage({ action: "SHOW_ERROR", error: userMessage }).catch(() => {
-            chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Error', message: userMessage });
+            chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Error', message: userMessage });
         });
     }
 }

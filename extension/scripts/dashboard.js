@@ -386,7 +386,7 @@ chrome.runtime.onMessage.addListener((message) => {
         // Also show notification if popup is not visible
         chrome.notifications.create({ 
             type: 'basic', 
-            iconUrl: 'icons/icon48.png', 
+            iconUrl: chrome.runtime.getURL('icons/icon48.png'),
             title: 'AnyPNG Error', 
             message: errorText 
         });
