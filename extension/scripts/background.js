@@ -5,6 +5,27 @@ chrome.runtime.onInstalled.addListener(() => {
     chrome.contextMenus.create({ id: "upscale_png", title: "✨ Upscale & Download", parentId: "pro_image_tools", contexts: ["image"] });
     chrome.contextMenus.create({ id: "watermark_png", title: "💎 Remove Watermark (Pro)", parentId: "pro_image_tools", contexts: ["image"] });
     chrome.contextMenus.create({ id: "remove_bg_png", title: "✂️ Remove Background", parentId: "pro_image_tools", contexts: ["image"] });
+
+    // Generic direct-src video download — works for plain <video src> sites.
+    // Hidden (via onShown below) on the platforms that get the quality submenu instead.
+    chrome.contextMenus.create({ id: "download_video", title: "⬇️ Download Video (AnyPNG)", contexts: ["video"] });
+
+    // Quality-picker submenu for the four platforms with dedicated client-side handling.
+    chrome.contextMenus.create({
+        id: "video_download_tools",
+        title: "🎬 Download Video",
+        contexts: ["page", "video"],
+        documentUrlPatterns: VIDEO_PLATFORM_MATCH_PATTERNS,
+    });
+    VIDEO_QUALITY_OPTIONS.forEach(({ id, label }) => {
+        chrome.contextMenus.create({
+            id: `video_quality_${id}`,
+            title: label,
+            parentId: "video_download_tools",
+            contexts: ["page", "video"],
+            documentUrlPatterns: VIDEO_PLATFORM_MATCH_PATTERNS,
+        });
+    });
 });
 
 // 🔒 API CONFIGURATION
@@ -73,6 +94,235 @@ async function setupOffscreenDocument(path) {
 function toggleLoadingScreen(tabId, show, text = "") {
     chrome.tabs.sendMessage(tabId, { action: show ? "SHOW_LOADING" : "HIDE_LOADING", text: text })
         .catch(() => { if (show) chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'AnyPNG', message: text }); });
+}
+
+// ==========================================================
+// 🎬 VIDEO DOWNLOAD — client-first capture → remux → backend-fallback cascade
+// ==========================================================
+
+const VIDEO_PLATFORMS = {
+    youtube: { hosts: ["youtube.com", "youtu.be"], cdnPatterns: ["*://*.googlevideo.com/*"] },
+    instagram: { hosts: ["instagram.com"], cdnPatterns: ["*://*.cdninstagram.com/*", "*://*.fbcdn.net/*"] },
+    facebook: { hosts: ["facebook.com", "fb.watch"], cdnPatterns: ["*://*.fbcdn.net/*", "*://*.cdninstagram.com/*"] },
+    tiktok: { hosts: ["tiktok.com"], cdnPatterns: ["*://*.tiktokcdn.com/*", "*://*.tiktokcdn-us.com/*", "*://*.tiktokv.com/*"] },
+};
+
+const VIDEO_PLATFORM_MATCH_PATTERNS = Object.values(VIDEO_PLATFORMS)
+    .flatMap(p => p.hosts)
+    .flatMap(h => [`*://${h}/*`, `*://*.${h}/*`]);
+
+const VIDEO_CDN_PATTERNS = Object.values(VIDEO_PLATFORMS).flatMap(p => p.cdnPatterns);
+
+const VIDEO_QUALITY_OPTIONS = [
+    { id: "best", label: "Best Quality" },
+    { id: "1080", label: "1080p" },
+    { id: "720", label: "720p" },
+    { id: "480", label: "480p" },
+    { id: "audio", label: "Audio Only (MP3)" },
+];
+
+function matchesAnyHost(hostname, hosts) {
+    hostname = (hostname || "").toLowerCase();
+    return hosts.some(h => hostname === h || hostname.endsWith("." + h));
+}
+
+function detectVideoPlatform(url) {
+    try {
+        const hostname = new URL(url).hostname;
+        for (const [name, cfg] of Object.entries(VIDEO_PLATFORMS)) {
+            if (matchesAnyHost(hostname, cfg.hosts)) return name;
+        }
+    } catch (e) { /* not a valid URL */ }
+    return null;
+}
+
+// tabId -> [{ url, type, timestamp }] — cleared on navigation, capped per tab.
+const capturedStreams = new Map();
+const MAX_CAPTURED_PER_TAB = 25;
+const CAPTURE_FRESHNESS_MS = 20000;
+
+chrome.webRequest.onBeforeRequest.addListener(
+    (details) => {
+        if (details.tabId < 0) return;
+        const list = capturedStreams.get(details.tabId) || [];
+        list.push({ url: details.url, type: details.type, timestamp: Date.now() });
+        if (list.length > MAX_CAPTURED_PER_TAB) list.shift();
+        capturedStreams.set(details.tabId, list);
+    },
+    { urls: VIDEO_CDN_PATTERNS },
+    []
+);
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    if (changeInfo.status === "loading") capturedStreams.delete(tabId);
+});
+chrome.tabs.onRemoved.addListener((tabId) => capturedStreams.delete(tabId));
+
+// Show the quality submenu only on the four supported platforms; hide the generic
+// direct-src item there so right-clicking a video never shows two AnyPNG video entries.
+if (chrome.contextMenus.onShown) {
+    chrome.contextMenus.onShown.addListener((info, tab) => {
+        const isSupportedPlatform = !!detectVideoPlatform(info.pageUrl || (tab && tab.url));
+        chrome.contextMenus.update("download_video", { visible: !isSupportedPlatform });
+        chrome.contextMenus.update("video_download_tools", { visible: isSupportedPlatform });
+        chrome.contextMenus.refresh();
+    });
+}
+
+function classifyCapturedStream(url) {
+    try {
+        const mime = new URL(url).searchParams.get("mime"); // YouTube googlevideo.com URLs
+        if (mime) {
+            if (mime.startsWith("video/")) return mime.includes("mp4") ? "video-mp4" : "video-other";
+            if (mime.startsWith("audio/")) return mime.includes("mp4") || mime.includes("mp4a") ? "audio-mp4" : "audio-other";
+        }
+    } catch (e) { /* ignore */ }
+    return "muxed"; // Instagram/Facebook/TikTok CDN links are typically combined audio+video
+}
+
+function guessVideoExt(url) {
+    const clean = url.split(/[?#]/)[0];
+    const ext = (clean.split('.').pop() || '').toLowerCase();
+    return /^[a-z0-9]{2,5}$/.test(ext) ? ext : 'mp4';
+}
+
+function notifyVideoDownloadSource(sourceLabel) {
+    const labels = {
+        direct: "Downloaded directly ✓",
+        captured: "Downloaded directly ✓",
+        remuxed: "Downloaded & merged locally ✓",
+        server: "Downloaded via server ✓",
+    };
+    chrome.runtime.sendMessage({ action: "VIDEO_DOWNLOAD_STATUS", label: labels[sourceLabel] || "Downloaded ✓" }).catch(() => { });
+}
+
+async function arrayBufferToBase64(buffer) {
+    const dataUrl = await blobToDataUrl(new Blob([buffer]));
+    return dataUrl.split(',')[1];
+}
+
+async function downloadDirectUrl(url, platform, sourceLabel) {
+    await new Promise((resolve, reject) => {
+        chrome.downloads.download({ url, filename: `AnyPNG_${platform}_${Date.now()}.${guessVideoExt(url)}` }, (id) => {
+            if (chrome.runtime.lastError || id === undefined) reject(new Error(chrome.runtime.lastError?.message || "Download failed"));
+            else resolve(id);
+        });
+    });
+    notifyVideoDownloadSource(sourceLabel);
+}
+
+async function downloadAndRemux(videoUrl, audioUrl, platform) {
+    const [videoBuf, audioBuf] = await Promise.all([
+        fetch(videoUrl).then(r => r.arrayBuffer()),
+        fetch(audioUrl).then(r => r.arrayBuffer()),
+    ]);
+
+    await setupOffscreenDocument('pages/offscreen.html');
+    const result = await chrome.runtime.sendMessage({
+        target: 'offscreen',
+        action: 'remuxVideoAudio',
+        video: await arrayBufferToBase64(videoBuf),
+        audio: await arrayBufferToBase64(audioBuf),
+    });
+
+    if (result.error) throw new Error(result.error);
+
+    chrome.downloads.download({ url: `data:video/mp4;base64,${result.data}`, filename: `AnyPNG_${platform}_${Date.now()}.mp4` });
+    notifyVideoDownloadSource("remuxed");
+}
+
+async function downloadViaBackend(tab, quality, platform) {
+    toggleLoadingScreen(tab.id, true, "Downloading via server...");
+
+    const formData = new FormData();
+    formData.append('url', tab.url);
+    formData.append('quality', quality || 'best');
+
+    const apiRes = await fetch(`${API_CONFIG.url}/download-video`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${API_CONFIG.basicToken}` },
+        body: formData,
+    });
+
+    if (!apiRes.ok) {
+        const errData = await apiRes.json().catch(() => ({}));
+        throw new Error(errData.detail || `Server error: ${apiRes.statusText}`);
+    }
+
+    const blob = await apiRes.blob();
+    const dataUrl = await blobToDataUrl(blob);
+    const ext = quality === 'audio' ? 'mp3' : 'mp4';
+    chrome.downloads.download({ url: dataUrl, filename: `AnyPNG_${platform}_${Date.now()}.${ext}` });
+    notifyVideoDownloadSource("server");
+}
+
+// Step 1: real <video> src if not blob-based. Step 2: nudge playback, then check
+// what the platform's own player already fetched (captured passively via webRequest).
+// Step 3: fall back to the self-hosted yt-dlp backend. Each step degrades gracefully
+// into the next on failure rather than surfacing an error immediately.
+async function resolveVideoDownload(tab, quality, pageUrlOverride) {
+    const pageUrl = pageUrlOverride || tab.url;
+    const platform = detectVideoPlatform(pageUrl);
+    if (!platform) {
+        chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'AnyPNG', message: 'This page is not a supported video platform (YouTube, Instagram, Facebook, TikTok).' });
+        return;
+    }
+
+    // If the caller supplied a different URL than the tab's own (e.g. a pasted link
+    // in the popup), the content-script/capture steps refer to the wrong page — go
+    // straight to the backend, which fetches the URL itself server-side.
+    const canUseTabLocalSteps = pageUrl === tab.url;
+
+    toggleLoadingScreen(tab.id, true, "Locating video...");
+
+    try {
+        if (!canUseTabLocalSteps) {
+            await downloadViaBackend({ ...tab, url: pageUrl }, quality, platform);
+            return;
+        }
+
+        try {
+            const res = await chrome.tabs.sendMessage(tab.id, { action: "GET_VIDEO_SRC" });
+            const directSrc = res && res.src;
+            if (directSrc && !directSrc.startsWith("blob:") && !directSrc.startsWith("mediasource:")) {
+                await downloadDirectUrl(directSrc, platform, "direct");
+                return;
+            }
+        } catch (e) { /* content script unavailable — fall through */ }
+
+        try {
+            await chrome.tabs.sendMessage(tab.id, { action: "NUDGE_VIDEO_PLAYBACK" });
+        } catch (e) { /* fall through regardless */ }
+
+        const streams = capturedStreams.get(tab.id) || [];
+        const recent = streams.filter(s => Date.now() - s.timestamp < CAPTURE_FRESHNESS_MS);
+        const classified = recent.map(s => ({ ...s, kind: classifyCapturedStream(s.url) }));
+
+        const muxed = classified.filter(s => s.kind === "muxed");
+        const videoMp4 = classified.filter(s => s.kind === "video-mp4");
+        const audioMp4 = classified.filter(s => s.kind === "audio-mp4");
+
+        try {
+            if (muxed.length > 0) {
+                await downloadDirectUrl(muxed[muxed.length - 1].url, platform, "captured");
+                return;
+            }
+            if (videoMp4.length > 0 && audioMp4.length > 0) {
+                await downloadAndRemux(videoMp4[videoMp4.length - 1].url, audioMp4[audioMp4.length - 1].url, platform);
+                return;
+            }
+        } catch (e) {
+            console.warn("[AnyPNG] Client-side video capture/remux failed, falling back to server:", e);
+        }
+
+        // Step 3: backend fallback
+        await downloadViaBackend(tab, quality, platform);
+
+    } catch (error) {
+        chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Video Download Failed', message: error.message });
+    } finally {
+        toggleLoadingScreen(tab.id, false);
+    }
 }
 
 // Listen for clicks
@@ -176,6 +426,41 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         } finally {
             toggleLoadingScreen(tab.id, false);
         }
+    }
+
+    // ==========================================
+    // 🎬 LOCAL TOOL: VIDEO DOWNLOAD
+    // ==========================================
+    else if (info.menuItemId === "download_video") {
+        if (!info.srcUrl) {
+            chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Download Failed', message: 'No video source found on this element.' });
+            return;
+        }
+
+        // blob:/mediasource: URLs are scoped to the page and can't be resolved
+        // from the background service worker, so a direct download won't work.
+        if (info.srcUrl.startsWith('blob:') || info.srcUrl.startsWith('mediasource:')) {
+            chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Unsupported Video', message: 'This video is streamed (blob URL) and cannot be downloaded directly.' });
+            return;
+        }
+
+        const urlNoQuery = info.srcUrl.split(/[?#]/)[0];
+        const rawExt = (urlNoQuery.split('.').pop() || '').toLowerCase();
+        const ext = /^[a-z0-9]{2,5}$/.test(rawExt) ? rawExt : 'mp4';
+
+        chrome.downloads.download({ url: info.srcUrl, filename: `AnyPNG_Video_${Date.now()}.${ext}` }, () => {
+            if (chrome.runtime.lastError) {
+                chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon48.png', title: 'Download Failed', message: chrome.runtime.lastError.message });
+            }
+        });
+    }
+
+    // ==========================================
+    // 🎬 CLIENT-FIRST VIDEO DOWNLOAD (YouTube / Instagram / Facebook / TikTok)
+    // ==========================================
+    else if (info.menuItemId.startsWith("video_quality_")) {
+        const quality = info.menuItemId.replace("video_quality_", "");
+        await resolveVideoDownload(tab, quality);
     }
 });
 
@@ -282,5 +567,8 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
         }
     } else if (message.action === "DOWNLOAD_RESULT") {
         chrome.downloads.download({ url: message.url, filename: `AnyPNG_Pro_Cleaned_${Date.now()}.png` });
+    } else if (message.action === "DOWNLOAD_VIDEO") {
+        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (activeTab) await resolveVideoDownload(activeTab, message.quality, message.url);
     }
 });

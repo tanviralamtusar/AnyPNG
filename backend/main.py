@@ -1,10 +1,17 @@
 import os
+import re
+import asyncio
+import tempfile
+import shutil
+from urllib.parse import urlparse
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, UploadFile, Depends, HTTPException, Form
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import Response
+from fastapi.responses import Response, FileResponse
+from starlette.background import BackgroundTask
+import yt_dlp
 
 # Load environment variables
 load_dotenv()
@@ -110,6 +117,107 @@ def run_gemini_image_edit(contents: bytes, mime_type: str, prompt: str, model: s
 @app.get("/ping")
 async def ping():
     return {"status": "success", "message": "API is Live!"}
+
+
+# 🎬 VIDEO DOWNLOAD (yt-dlp fallback for the extension's client-side capture cascade)
+
+# Only these platforms are supported — without this allowlist, yt-dlp (which supports
+# thousands of sites) would turn this endpoint into an open URL-fetch proxy.
+ALLOWED_VIDEO_HOST_SUFFIXES = (
+    "youtube.com", "youtu.be",
+    "instagram.com",
+    "facebook.com", "fb.watch",
+    "tiktok.com",
+)
+
+MAX_VIDEO_FILESIZE = 300 * 1024 * 1024  # 300MB — protects the unauthenticated-free endpoint
+
+
+def _is_allowed_video_url(url: str) -> bool:
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return False
+    if not host:
+        return False
+    return any(host == suffix or host.endswith("." + suffix) for suffix in ALLOWED_VIDEO_HOST_SUFFIXES)
+
+
+def _format_for_quality(quality: str) -> str:
+    if quality == "audio":
+        return "bestaudio/best"
+    if quality in ("1080", "720", "480"):
+        return f"bestvideo[height<={quality}]+bestaudio/best[height<={quality}]/best[height<={quality}]"
+    return "bestvideo*+bestaudio/best"
+
+
+def _run_ytdlp_download(url: str, quality: str, out_dir: str) -> str:
+    """Blocking call — must be run off the event loop. Returns the downloaded file path."""
+    ydl_opts = {
+        "format": _format_for_quality(quality),
+        "outtmpl": os.path.join(out_dir, "%(title).100s.%(ext)s"),
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "max_filesize": MAX_VIDEO_FILESIZE,
+        "socket_timeout": 30,
+        "retries": 3,
+        "restrictfilenames": True,
+    }
+    if quality == "audio":
+        ydl_opts["postprocessors"] = [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+        }]
+    else:
+        ydl_opts["merge_output_format"] = "mp4"
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        filepath = ydl.prepare_filename(info)
+        if quality == "audio":
+            filepath = os.path.splitext(filepath)[0] + ".mp3"
+        elif not os.path.exists(filepath):
+            # merge_output_format may have changed the extension
+            filepath = os.path.splitext(filepath)[0] + ".mp4"
+        return filepath
+
+
+@app.post("/download-video", dependencies=[Depends(verify_token)])
+async def download_video(
+    url: str = Form(...),
+    quality: str = Form("best"),
+):
+    if not _is_allowed_video_url(url):
+        raise HTTPException(status_code=400, detail="Unsupported video URL. Supported: YouTube, Instagram, Facebook, TikTok.")
+
+    if quality not in ("best", "1080", "720", "480", "audio"):
+        quality = "best"
+
+    out_dir = tempfile.mkdtemp(prefix="anypng_video_")
+
+    try:
+        filepath = await asyncio.to_thread(_run_ytdlp_download, url, quality, out_dir)
+    except yt_dlp.utils.DownloadError as e:
+        shutil.rmtree(out_dir, ignore_errors=True)
+        raise HTTPException(status_code=422, detail="Could not download this video. It may be private, age-restricted, or removed.") from e
+    except Exception as e:
+        shutil.rmtree(out_dir, ignore_errors=True)
+        raise HTTPException(status_code=502, detail=f"Video download failed: {str(e)}") from e
+
+    if not filepath or not os.path.exists(filepath):
+        shutil.rmtree(out_dir, ignore_errors=True)
+        raise HTTPException(status_code=502, detail="Video download failed: no output file produced.")
+
+    media_type = "audio/mpeg" if quality == "audio" else "video/mp4"
+    filename = os.path.basename(filepath)
+
+    return FileResponse(
+        filepath,
+        media_type=media_type,
+        filename=filename,
+        background=BackgroundTask(shutil.rmtree, out_dir, ignore_errors=True),
+    )
 
 
 @app.post("/upscale", dependencies=[Depends(verify_token)])

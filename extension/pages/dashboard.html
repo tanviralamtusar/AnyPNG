@@ -125,6 +125,32 @@
         </div>
       </div>
     </div>
+
+    <div id="video-section" class="hidden">
+        <div class="glass-effect preview-container" id="video-info-box">
+            <input type="text" id="video-url-input" placeholder="Video page URL">
+            <p id="video-platform-badge" class="processing-status-text">Detecting platform...</p>
+            <select id="video-quality-select">
+                <option value="best">Best Quality</option>
+                <option value="1080">1080p</option>
+                <option value="720">720p</option>
+                <option value="480">480p</option>
+                <option value="audio">Audio Only (MP3)</option>
+            </select>
+            <p id="video-status-line" class="processing-status-text hidden"></p>
+        </div>
+
+        <div class="action-column">
+            <button id="video-download-btn" class="btn-primary">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+                Download Video
+            </button>
+        </div>
+    </div>
   </div>
 
   <nav class="bottom-nav">
@@ -133,6 +159,13 @@
         <path d="M12 3l9 8h-3v10H6V11H3z" />
       </svg>
       <span>Home</span>
+    </button>
+    <button class="nav-item" id="nav-video-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polygon points="23 7 16 12 23 17 23 7" />
+        <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+      </svg>
+      <span>Video</span>
     </button>
     <button class="nav-item" id="nav-settings-btn">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

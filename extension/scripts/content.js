@@ -22,5 +22,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else if (message.action === "HIDE_LOADING") {
         const loader = document.getElementById("anypng-loading-overlay");
         if (loader) loader.remove();
+    } else if (message.action === "GET_VIDEO_SRC") {
+        const video = document.querySelector("video");
+        sendResponse({ src: video ? video.currentSrc : null });
+        return true;
+    } else if (message.action === "NUDGE_VIDEO_PLAYBACK") {
+        const video = document.querySelector("video");
+        if (!video) {
+            sendResponse({ ok: false });
+            return true;
+        }
+        const wasMuted = video.muted;
+        const wasPaused = video.paused;
+        video.muted = true;
+        video.play().catch(() => { });
+        setTimeout(() => {
+            if (wasPaused) video.pause();
+            video.muted = wasMuted;
+            sendResponse({ ok: true });
+        }, 1200);
+        return true;
     }
 });

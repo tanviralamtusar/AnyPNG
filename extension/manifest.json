@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AnyPNG",
   "version": "2.2.4",
-  "description": "Right-click any image to convert, upscale, or remove watermarks — powered by self-hosted AI backend.",
+  "description": "Right-click any image to convert, upscale, or remove watermarks, or right-click any video to download it — powered by self-hosted AI backend.",
   "permissions": [
     "contextMenus",
     "downloads",
@@ -10,7 +10,8 @@
     "scripting",
     "storage",
     "notifications",
-    "offscreen"
+    "offscreen",
+    "webRequest"
   ],
   "host_permissions": [
     "<all_urls>"

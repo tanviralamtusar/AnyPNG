@@ -57,19 +57,114 @@ document.getElementById('settings-btn').onclick = () => {
 
 
 // --- Navigation Logics ---
+function showHomeSection() {
+    document.getElementById('watermark-section').classList.remove('hidden');
+    document.getElementById('video-section').classList.add('hidden');
+    document.getElementById('nav-home-btn').classList.add('active');
+    document.getElementById('nav-video-btn').classList.remove('active');
+}
+
+function showVideoSection() {
+    document.getElementById('watermark-section').classList.add('hidden');
+    document.getElementById('video-section').classList.remove('hidden');
+    document.getElementById('nav-home-btn').classList.remove('active');
+    document.getElementById('nav-video-btn').classList.add('active');
+    initVideoSection();
+}
+
 document.getElementById('nav-home-btn').onclick = async () => {
-    // Already on dashboard, maybe just reload or ensure state
     const { supabaseSession } = await chrome.storage.local.get('supabaseSession');
     if (!supabaseSession) {
         window.location.replace('login.html');
+        return;
     }
+    showHomeSection();
 };
+
+document.getElementById('nav-video-btn').onclick = showVideoSection;
 
 document.getElementById('nav-settings-btn').onclick = () => {
     document.getElementById('nav-home-btn').classList.remove('active');
+    document.getElementById('nav-video-btn').classList.remove('active');
     document.getElementById('nav-settings-btn').classList.add('active');
     document.getElementById('logout-btn')?.classList.remove('active');
     chrome.runtime.openOptionsPage();
+};
+
+// --- Video Downloader ---
+const VIDEO_PLATFORM_HOSTS = {
+    youtube: ["youtube.com", "youtu.be"],
+    instagram: ["instagram.com"],
+    facebook: ["facebook.com", "fb.watch"],
+    tiktok: ["tiktok.com"],
+};
+
+function detectVideoPlatformLabel(url) {
+    try {
+        const hostname = new URL(url).hostname.toLowerCase();
+        for (const [name, hosts] of Object.entries(VIDEO_PLATFORM_HOSTS)) {
+            if (hosts.some(h => hostname === h || hostname.endsWith("." + h))) {
+                return name.charAt(0).toUpperCase() + name.slice(1);
+            }
+        }
+    } catch (e) { /* ignore */ }
+    return null;
+}
+
+let videoSectionInitialized = false;
+
+async function initVideoSection() {
+    const badge = document.getElementById('video-platform-badge');
+    const urlInput = document.getElementById('video-url-input');
+    const downloadBtn = document.getElementById('video-download-btn');
+
+    if (!videoSectionInitialized) {
+        videoSectionInitialized = true;
+
+        const { defaultVideoQuality } = await chrome.storage.sync.get('defaultVideoQuality');
+        if (defaultVideoQuality) {
+            document.getElementById('video-quality-select').value = defaultVideoQuality;
+        }
+
+        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (activeTab && activeTab.url) urlInput.value = activeTab.url;
+
+        urlInput.addEventListener('input', updateVideoPlatformBadge);
+    }
+
+    updateVideoPlatformBadge();
+}
+
+function updateVideoPlatformBadge() {
+    const urlInput = document.getElementById('video-url-input');
+    const badge = document.getElementById('video-platform-badge');
+    const downloadBtn = document.getElementById('video-download-btn');
+    const platform = detectVideoPlatformLabel(urlInput.value);
+
+    if (platform) {
+        badge.innerText = `Detected: ${platform}`;
+        downloadBtn.disabled = false;
+    } else {
+        badge.innerText = "Unsupported site — paste a YouTube, Instagram, Facebook, or TikTok link.";
+        downloadBtn.disabled = true;
+    }
+}
+
+document.getElementById('video-download-btn').onclick = async () => {
+    const urlInput = document.getElementById('video-url-input');
+    const quality = document.getElementById('video-quality-select').value;
+    const statusLine = document.getElementById('video-status-line');
+    const downloadBtn = document.getElementById('video-download-btn');
+
+    statusLine.innerText = "Locating video...";
+    statusLine.classList.remove('hidden');
+    downloadBtn.disabled = true;
+
+    try {
+        chrome.runtime.sendMessage({ action: "DOWNLOAD_VIDEO", url: urlInput.value, quality });
+    } finally {
+        setTimeout(() => { downloadBtn.disabled = false; }, 2000);
+    }
 };
 
 document.getElementById('logout-btn').onclick = async () => {
@@ -295,6 +390,12 @@ chrome.runtime.onMessage.addListener((message) => {
             title: 'AnyPNG Error', 
             message: errorText 
         });
+    } else if (message.action === "VIDEO_DOWNLOAD_STATUS") {
+        const statusLine = document.getElementById('video-status-line');
+        if (statusLine) {
+            statusLine.innerText = message.label || "Downloaded ✓";
+            statusLine.classList.remove('hidden');
+        }
     } else if (message.action === "PROCESSING_WATERMARK") {
         document.getElementById('popup-placeholder').classList.add('hidden');
         document.getElementById('popup-result-img').style.display = "none";
