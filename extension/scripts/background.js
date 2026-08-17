@@ -201,6 +201,12 @@ async function arrayBufferToBase64(buffer) {
     return dataUrl.split(',')[1];
 }
 
+// Below this, a captured URL is almost certainly not real media — e.g. YouTube's
+// SABR streaming protocol rejects a naive replayed GET with a ~30-byte protobuf
+// error ("sabr.malformed_config") instead of 403ing, which would otherwise silently
+// download as a tiny, unplayable "video" file.
+const MIN_VALID_VIDEO_BYTES = 50 * 1024;
+
 async function downloadDirectUrl(url, platform, sourceLabel) {
     await new Promise((resolve, reject) => {
         chrome.downloads.download({ url, filename: `AnyPNG_${platform}_${Date.now()}.${guessVideoExt(url)}` }, (id) => {
@@ -211,11 +217,32 @@ async function downloadDirectUrl(url, platform, sourceLabel) {
     notifyVideoDownloadSource(sourceLabel);
 }
 
+// Same as downloadDirectUrl, but fetches and sanity-checks the payload size first —
+// used for captured (not directly-observed-in-DOM) URLs, which are the ones a
+// platform's streaming protocol can reject with a small placeholder instead of a
+// clean HTTP error.
+async function downloadCapturedUrl(url, platform, sourceLabel) {
+    const buf = await fetch(url).then(r => {
+        if (!r.ok) throw new Error(`Captured stream request failed: ${r.status}`);
+        return r.arrayBuffer();
+    });
+    if (buf.byteLength < MIN_VALID_VIDEO_BYTES) {
+        throw new Error(`Captured stream is too small (${buf.byteLength} bytes) to be real video — likely a protocol placeholder, not media data.`);
+    }
+    const dataUrl = await blobToDataUrl(new Blob([buf]));
+    chrome.downloads.download({ url: dataUrl, filename: `AnyPNG_${platform}_${Date.now()}.${guessVideoExt(url)}` });
+    notifyVideoDownloadSource(sourceLabel);
+}
+
 async function downloadAndRemux(videoUrl, audioUrl, platform) {
     const [videoBuf, audioBuf] = await Promise.all([
         fetch(videoUrl).then(r => r.arrayBuffer()),
         fetch(audioUrl).then(r => r.arrayBuffer()),
     ]);
+
+    if (videoBuf.byteLength < MIN_VALID_VIDEO_BYTES || audioBuf.byteLength < MIN_VALID_VIDEO_BYTES) {
+        throw new Error(`Captured stream(s) too small (video ${videoBuf.byteLength}B, audio ${audioBuf.byteLength}B) — likely a protocol placeholder, not media data.`);
+    }
 
     await setupOffscreenDocument('pages/offscreen.html');
     const result = await chrome.runtime.sendMessage({
@@ -304,7 +331,7 @@ async function resolveVideoDownload(tab, quality, pageUrlOverride) {
 
         try {
             if (muxed.length > 0) {
-                await downloadDirectUrl(muxed[muxed.length - 1].url, platform, "captured");
+                await downloadCapturedUrl(muxed[muxed.length - 1].url, platform, "captured");
                 return;
             }
             if (videoMp4.length > 0 && audioMp4.length > 0) {
