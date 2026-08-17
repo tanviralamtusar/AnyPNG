@@ -199,9 +199,14 @@ async def download_video(
     try:
         filepath = await asyncio.to_thread(_run_ytdlp_download, url, quality, out_dir)
     except yt_dlp.utils.DownloadError as e:
+        # The client only gets a generic message, but the real yt-dlp error (bot
+        # checks, geo-block, sign-in walls, format changes, etc.) is logged here so
+        # it's visible in server logs instead of silently disappearing.
+        print(f"[download-video] yt-dlp DownloadError for url={url!r} quality={quality!r}: {e}")
         shutil.rmtree(out_dir, ignore_errors=True)
         raise HTTPException(status_code=422, detail="Could not download this video. It may be private, age-restricted, or removed.") from e
     except Exception as e:
+        print(f"[download-video] Unexpected error for url={url!r} quality={quality!r}: {e}")
         shutil.rmtree(out_dir, ignore_errors=True)
         raise HTTPException(status_code=502, detail=f"Video download failed: {str(e)}") from e
 
