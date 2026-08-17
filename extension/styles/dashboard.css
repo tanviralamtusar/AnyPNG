@@ -10,8 +10,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 2px 6px;
-  margin-bottom: 14px;
+  padding: 12px 2px 6px;
+  margin-bottom: 10px;
 }
 
 .logo-container {
@@ -71,8 +71,8 @@ body {
 
 /* Credits Card */
 .credits-card {
-  padding: 16px 18px;
-  margin-bottom: 14px;
+  padding: 13px 18px;
+  margin-bottom: 10px;
   position: relative;
   overflow: hidden;
 }
@@ -120,11 +120,11 @@ body {
 }
 
 .credits-number {
-  font-size: 36px;
+  font-size: 32px;
   font-weight: 800;
   letter-spacing: -1px;
   line-height: 1;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
   position: relative;
   z-index: 10;
   transition: opacity 0.2s ease;
@@ -182,12 +182,12 @@ body.light-theme .progress-bar-bg {
 
 .preview-container {
   width: 100%;
-  aspect-ratio: 16 / 10;
+  aspect-ratio: 16 / 9;
   display: flex;
   justify-content: center;
   align-items: center;
   overflow: hidden;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
   position: relative;
   border-radius: var(--radius-sm);
   background:
@@ -497,8 +497,8 @@ button:disabled {
   display: flex;
   justify-content: space-around;
   align-items: center;
-  margin: 14px -18px 0;
-  padding: 11px 18px calc(11px + env(safe-area-inset-bottom, 0px));
+  margin: 10px -18px 0;
+  padding: 9px 18px calc(9px + env(safe-area-inset-bottom, 0px));
   background: var(--surface);
   border-top: 1px solid var(--input-border);
   backdrop-filter: blur(14px);
