@@ -167,10 +167,14 @@ chrome.tabs.onRemoved.addListener((tabId) => capturedStreams.delete(tabId));
 // Show the quality submenu only on the four supported platforms; hide the generic
 // direct-src item there so right-clicking a video never shows two AnyPNG video entries.
 if (chrome.contextMenus.onShown) {
-    chrome.contextMenus.onShown.addListener((info, tab) => {
+    chrome.contextMenus.onShown.addListener(async (info, tab) => {
         const isSupportedPlatform = !!detectVideoPlatform(info.pageUrl || (tab && tab.url));
-        chrome.contextMenus.update("download_video", { visible: !isSupportedPlatform });
-        chrome.contextMenus.update("video_download_tools", { visible: isSupportedPlatform });
+        // update() is async — must resolve before refresh() or the menu can render
+        // with stale visibility (both items showing at once).
+        await Promise.all([
+            chrome.contextMenus.update("download_video", { visible: !isSupportedPlatform }),
+            chrome.contextMenus.update("video_download_tools", { visible: isSupportedPlatform }),
+        ]);
         chrome.contextMenus.refresh();
     });
 }
@@ -278,8 +282,14 @@ async function downloadViaBackend(tab, quality, platform) {
     });
 
     if (!apiRes.ok) {
-        const errData = await apiRes.json().catch(() => ({}));
-        throw new Error(errData.detail || `Server error: ${apiRes.statusText}`);
+        // statusText is frequently empty on HTTP/2 responses in Chrome, so fall back
+        // to the numeric status (and a snippet of the raw body if it wasn't JSON) —
+        // otherwise failures collapse into an unhelpful bare "Server error:".
+        const rawBody = await apiRes.text().catch(() => "");
+        let detail = null;
+        try { detail = JSON.parse(rawBody).detail; } catch (e) { /* not JSON */ }
+        const bodySnippet = rawBody && !detail ? ` — ${rawBody.slice(0, 200)}` : "";
+        throw new Error(detail || `Server error: HTTP ${apiRes.status} ${apiRes.statusText}${bodySnippet}`);
     }
 
     const blob = await apiRes.blob();
@@ -472,8 +482,17 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
         // blob:/mediasource: URLs are scoped to the page and can't be resolved
         // from the background service worker, so a direct download won't work.
+        // If this is one of the four platforms with dedicated handling, delegate to
+        // the capture/remux/backend cascade instead of just failing — this also
+        // covers the case where the quality submenu (see below) didn't show for
+        // whatever reason and the user only had this generic item to click.
         if (info.srcUrl.startsWith('blob:') || info.srcUrl.startsWith('mediasource:')) {
-            chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Unsupported Video', message: 'This video is streamed (blob URL) and cannot be downloaded directly.' });
+            if (detectVideoPlatform(tab.url)) {
+                const { defaultVideoQuality } = await chrome.storage.sync.get('defaultVideoQuality');
+                await resolveVideoDownload(tab, defaultVideoQuality || 'best');
+            } else {
+                chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Unsupported Video', message: 'This video is streamed (blob URL) and cannot be downloaded directly.' });
+            }
             return;
         }
 
