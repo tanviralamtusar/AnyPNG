@@ -143,6 +143,13 @@ def _is_allowed_video_url(url: str) -> bool:
     return any(host == suffix or host.endswith("." + suffix) for suffix in ALLOWED_VIDEO_HOST_SUFFIXES)
 
 
+# Optional: path to a Netscape-format cookies file (exported from a real, logged-in
+# YouTube session) used to get past YouTube's bot-check on datacenter/VPS IPs
+# ("Sign in to confirm you're not a bot"). Not required — yt-dlp just works without
+# it for sites/videos that don't trigger that check.
+YTDLP_COOKIES_FILE = os.getenv("YTDLP_COOKIES_FILE", "/app/cookies/cookies.txt")
+
+
 def _format_for_quality(quality: str) -> str:
     if quality == "audio":
         return "bestaudio/best"
@@ -164,6 +171,8 @@ def _run_ytdlp_download(url: str, quality: str, out_dir: str) -> str:
         "retries": 3,
         "restrictfilenames": True,
     }
+    if os.path.isfile(YTDLP_COOKIES_FILE):
+        ydl_opts["cookiefile"] = YTDLP_COOKIES_FILE
     if quality == "audio":
         ydl_opts["postprocessors"] = [{
             "key": "FFmpegExtractAudio",
