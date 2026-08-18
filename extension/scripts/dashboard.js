@@ -99,16 +99,57 @@ const VIDEO_PLATFORM_HOSTS = {
     tiktok: ["tiktok.com"],
 };
 
-function detectVideoPlatformLabel(url) {
+function detectVideoPlatformKey(url) {
     try {
         const hostname = new URL(url).hostname.toLowerCase();
         for (const [name, hosts] of Object.entries(VIDEO_PLATFORM_HOSTS)) {
-            if (hosts.some(h => hostname === h || hostname.endsWith("." + h))) {
-                return name.charAt(0).toUpperCase() + name.slice(1);
-            }
+            if (hosts.some(h => hostname === h || hostname.endsWith("." + h))) return name;
         }
     } catch (e) { /* ignore */ }
     return null;
+}
+
+function detectVideoPlatformLabel(url) {
+    const key = detectVideoPlatformKey(url);
+    return key ? key.charAt(0).toUpperCase() + key.slice(1) : null;
+}
+
+// Mirrors background.js's OBVIOUSLY_NOT_A_VIDEO_PATTERNS — deliberately conservative,
+// only flags clear-cut non-video pages (bare root, known feed/browse tabs). Shown as
+// a soft, non-blocking warning here (unlike the context-menu path, which has no
+// follow-up UI) since the URL field is editable and the heuristic may be wrong.
+const OBVIOUSLY_NOT_A_VIDEO_PATTERNS = {
+    youtube: [
+        /^https?:\/\/(www\.|m\.)?youtube\.com\/?(\?.*)?$/i,
+        /^https?:\/\/(www\.|m\.)?youtube\.com\/(feed|results|channel|c|@)(\/|$|\?)/i,
+    ],
+    instagram: [
+        /^https?:\/\/(www\.)?instagram\.com\/?(\?.*)?$/i,
+        /^https?:\/\/(www\.)?instagram\.com\/(explore|direct|accounts)(\/|$|\?)/i,
+    ],
+    facebook: [
+        /^https?:\/\/(www\.|m\.)?facebook\.com\/?(\?.*)?$/i,
+        /^https?:\/\/(www\.|m\.)?facebook\.com\/(home|feed|marketplace|groups|friends|notifications)(\/|$|\?)/i,
+    ],
+    tiktok: [
+        /^https?:\/\/(www\.)?tiktok\.com\/?(\?.*)?$/i,
+        /^https?:\/\/(www\.)?tiktok\.com\/(foryou|following|explore|live)(\/|$|\?)/i,
+    ],
+};
+
+function isObviouslyNotAVideoPage(platform, url) {
+    const patterns = OBVIOUSLY_NOT_A_VIDEO_PATTERNS[platform];
+    if (patterns && patterns.some((re) => re.test(url))) return true;
+
+    // Facebook's /watch is the videos-browse tab UNLESS it has a ?v= param (a
+    // specific video) — parsed properly rather than a fragile regex lookahead.
+    if (platform === "facebook") {
+        try {
+            const u = new URL(url);
+            if (/^\/watch\/?$/.test(u.pathname) && !u.searchParams.has("v")) return true;
+        } catch (e) { /* ignore */ }
+    }
+    return false;
 }
 
 let videoSectionInitialized = false;
@@ -139,10 +180,15 @@ function updateVideoPlatformBadge() {
     const urlInput = document.getElementById('video-url-input');
     const badge = document.getElementById('video-platform-badge');
     const downloadBtn = document.getElementById('video-download-btn');
-    const platform = detectVideoPlatformLabel(urlInput.value);
+    const platformKey = detectVideoPlatformKey(urlInput.value);
 
-    if (platform) {
-        badge.innerText = `Detected: ${platform}`;
+    if (platformKey) {
+        const label = platformKey.charAt(0).toUpperCase() + platformKey.slice(1);
+        if (isObviouslyNotAVideoPage(platformKey, urlInput.value)) {
+            badge.innerText = `Detected: ${label} — but this looks like a feed/home page, not a specific video. Open the video's own page and paste that URL instead.`;
+        } else {
+            badge.innerText = `Detected: ${label}`;
+        }
         downloadBtn.disabled = false;
     } else {
         badge.innerText = "Unsupported site — paste a YouTube, Instagram, Facebook, or TikTok link.";

@@ -142,6 +142,47 @@ function detectVideoPlatform(url) {
     return null;
 }
 
+// Best-effort, deliberately conservative: only flags the CLEAR-CUT non-video cases
+// (bare domain root, known feed/browse tabs) rather than trying to allowlist every
+// valid video-URL shape — a positive allowlist risks blocking legitimate videos
+// whose URL shape wasn't anticipated (Facebook especially has many valid forms:
+// /watch/?v=, /<page>/videos/<id>, /reel/<id>, fb.watch/<code>, Marketplace/Live,
+// etc.). Anything not matched here just proceeds through the normal cascade as
+// before. Expect to refine these patterns as more real failure cases surface.
+const OBVIOUSLY_NOT_A_VIDEO_PATTERNS = {
+    youtube: [
+        /^https?:\/\/(www\.|m\.)?youtube\.com\/?(\?.*)?$/i,
+        /^https?:\/\/(www\.|m\.)?youtube\.com\/(feed|results|channel|c|@)(\/|$|\?)/i,
+    ],
+    instagram: [
+        /^https?:\/\/(www\.)?instagram\.com\/?(\?.*)?$/i,
+        /^https?:\/\/(www\.)?instagram\.com\/(explore|direct|accounts)(\/|$|\?)/i,
+    ],
+    facebook: [
+        /^https?:\/\/(www\.|m\.)?facebook\.com\/?(\?.*)?$/i,
+        /^https?:\/\/(www\.|m\.)?facebook\.com\/(home|feed|marketplace|groups|friends|notifications)(\/|$|\?)/i,
+    ],
+    tiktok: [
+        /^https?:\/\/(www\.)?tiktok\.com\/?(\?.*)?$/i,
+        /^https?:\/\/(www\.)?tiktok\.com\/(foryou|following|explore|live)(\/|$|\?)/i,
+    ],
+};
+
+function isObviouslyNotAVideoPage(platform, url) {
+    const patterns = OBVIOUSLY_NOT_A_VIDEO_PATTERNS[platform];
+    if (patterns && patterns.some((re) => re.test(url))) return true;
+
+    // Facebook's /watch is the videos-browse tab UNLESS it has a ?v= param (a
+    // specific video) — parsed properly rather than a fragile regex lookahead.
+    if (platform === "facebook") {
+        try {
+            const u = new URL(url);
+            if (/^\/watch\/?$/.test(u.pathname) && !u.searchParams.has("v")) return true;
+        } catch (e) { /* ignore */ }
+    }
+    return false;
+}
+
 // tabId -> [{ url, type, timestamp }] — cleared on navigation, capped per tab.
 const capturedStreams = new Map();
 const MAX_CAPTURED_PER_TAB = 25;
@@ -308,6 +349,15 @@ async function resolveVideoDownload(tab, quality, pageUrlOverride) {
     const platform = detectVideoPlatform(pageUrl);
     if (!platform) {
         chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'AnyPNG', message: 'This page is not a supported video platform (YouTube, Instagram, Facebook, TikTok).' });
+        return;
+    }
+
+    // Catches the common mistake of right-clicking a video still embedded in a feed
+    // (e.g. Facebook's main feed never updates the address bar to the video's own
+    // URL) — sending that bare page URL to the cascade/backend would otherwise fail
+    // with a confusing "Unsupported URL" error instead of clear guidance.
+    if (isObviouslyNotAVideoPage(platform, pageUrl)) {
+        chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'AnyPNG', message: "This looks like a feed or home page, not a specific video. Open the video's own page first, then try again." });
         return;
     }
 
