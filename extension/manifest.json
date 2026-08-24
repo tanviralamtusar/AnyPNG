@@ -30,6 +30,15 @@
       "js": [
         "scripts/content.js"
       ]
+    },
+    {
+      "matches": [
+        "*://*.youtube.com/*"
+      ],
+      "js": [
+        "scripts/youtube-fab.js"
+      ],
+      "run_at": "document_idle"
     }
   ],
   "action": { "default_popup": "pages/popup.html" },

@@ -29,7 +29,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // Load sync settings
-    chrome.storage.sync.get(['upscaleFactor', 'enableAdvancedPrompt', 'aiModel', 'conversionQuality', 'defaultVideoQuality'], (result) => {
+    chrome.storage.sync.get(['upscaleFactor', 'enableAdvancedPrompt', 'aiModel', 'conversionQuality', 'defaultVideoQuality', 'showYoutubeButton'], (result) => {
         if (result.upscaleFactor) {
             document.getElementById('upscaleFactor').value = result.upscaleFactor;
         }
@@ -45,6 +45,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (result.defaultVideoQuality) {
             document.getElementById('defaultVideoQuality').value = result.defaultVideoQuality;
         }
+        // Absent means "never configured", and this one is on by default.
+        document.getElementById('showYoutubeButton').checked = result.showYoutubeButton !== false;
     });
 
     // Reconcile the cookie-auth toggle against the permission actually held: the
@@ -380,8 +382,9 @@ document.getElementById('saveBtn').addEventListener('click', () => {
     const aiModel = document.getElementById('aiModel').value;
     const conversionQuality = document.getElementById('conversionQuality').value;
     const defaultVideoQuality = document.getElementById('defaultVideoQuality').value;
+    const showYoutubeButton = document.getElementById('showYoutubeButton').checked;
 
-    chrome.storage.sync.set({ upscaleFactor, enableAdvancedPrompt, aiModel, conversionQuality, defaultVideoQuality }, () => {
+    chrome.storage.sync.set({ upscaleFactor, enableAdvancedPrompt, aiModel, conversionQuality, defaultVideoQuality, showYoutubeButton }, () => {
         const status = document.getElementById('status');
         status.classList.add('show');
 
