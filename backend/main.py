@@ -173,8 +173,20 @@ AUTH_WALL_MARKERS = (
 )
 
 
+# YouTube writes "you’re" with a typographic apostrophe (U+2019), not the ASCII
+# one, so markers containing an apostrophe would never match the real error text.
+# Normalise the handful of quote characters that show up in these messages.
+_QUOTE_TRANSLATION = str.maketrans({
+    "‘": "'",  # left single quote
+    "’": "'",  # right single quote / apostrophe
+    "ʼ": "'",  # modifier letter apostrophe
+    "“": '"',
+    "”": '"',
+})
+
+
 def _is_auth_wall(message: str) -> bool:
-    lowered = message.lower()
+    lowered = message.lower().translate(_QUOTE_TRANSLATION)
     return any(marker in lowered for marker in AUTH_WALL_MARKERS)
 
 
