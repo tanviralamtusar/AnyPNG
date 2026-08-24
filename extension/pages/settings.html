@@ -95,6 +95,23 @@
 
         <div class="setting-row">
           <div class="setting-info">
+            <label>Conversion Quality</label>
+            <p class="description">Encoder quality for the local WebP and AVIF conversions. Lower means a smaller file. PNG is always lossless.</p>
+          </div>
+          <div class="setting-control">
+            <div class="select-wrapper">
+              <select id="conversionQuality">
+                <option value="1">Maximum (lossless WebP)</option>
+                <option value="0.9">High (Default)</option>
+                <option value="0.8">Balanced</option>
+                <option value="0.6">Small File</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
             <label>Default Video Quality</label>
             <p class="description">Used for the popup's "Download Video" button and as the starting pick in the right-click quality menu.</p>
           </div>

@@ -1,6 +1,6 @@
 /**
  * Pro Image Tools — Offscreen Document Script
- * Performs image-to-PNG conversion using OffscreenCanvas.
+ * Performs image conversion (PNG / WebP / AVIF) using OffscreenCanvas.
  * 
  * Data is received as base64 strings (ArrayBuffer doesn't survive
  * chrome.runtime.sendMessage serialization).
@@ -11,10 +11,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return false;
     }
 
-    if (message.action === 'convertToPng') {
-        handleConversion(message.data, message.mimeType)
-            .then((pngBase64) => {
-                sendResponse({ data: pngBase64 });
+    if (message.action === 'convertImage') {
+        handleConversion(message.data, message.mimeType, message.targetType, message.quality)
+            .then((encodedBase64) => {
+                sendResponse({ data: encodedBase64 });
             })
             .catch((error) => {
                 console.error('[Offscreen] Conversion error:', error);
@@ -39,12 +39,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 /**
- * Convert any image base64 string to PNG using OffscreenCanvas.
+ * Convert any image base64 string to PNG, WebP or AVIF using OffscreenCanvas.
  * @param {string} base64Data - The source image data as base64.
  * @param {string} mimeType - The MIME type of the source image.
- * @returns {Promise<string>} PNG data as a base64 string.
+ * @param {string} [targetType='image/png'] - The MIME type to encode to.
+ * @param {number} [quality] - Encoder quality 0-1, for the lossy targets only.
+ * @returns {Promise<string>} Encoded image data as a base64 string.
  */
-async function handleConversion(base64Data, mimeType) {
+async function handleConversion(base64Data, mimeType, targetType = 'image/png', quality) {
     // Decode base64 to Uint8Array
     const raw = atob(base64Data);
     const uint8Array = new Uint8Array(raw.length);
@@ -65,21 +67,29 @@ async function handleConversion(base64Data, mimeType) {
     // Draw the image onto the canvas
     ctx.drawImage(imageBitmap, 0, 0);
 
-    // Convert to PNG Blob
-    const pngBlob = await canvas.convertToBlob({ type: 'image/png' });
+    // Encode. WebP and AVIF both keep the alpha channel, so nothing is flattened.
+    const encodeOptions = { type: targetType };
+    if (typeof quality === 'number') encodeOptions.quality = quality;
 
-    // Convert PNG Blob to base64 for messaging back
-    const pngArrayBuffer = await pngBlob.arrayBuffer();
-    const pngUint8Array = new Uint8Array(pngArrayBuffer);
-    let binary = '';
-    for (let i = 0; i < pngUint8Array.length; i++) {
-        binary += String.fromCharCode(pngUint8Array[i]);
+    let outputBlob;
+    try {
+        outputBlob = await canvas.convertToBlob(encodeOptions);
+    } finally {
+        imageBitmap.close();
     }
 
-    // Clean up
-    imageBitmap.close();
+    // convertToBlob silently falls back to PNG for a codec this browser can't
+    // encode (AVIF needs Chrome 124+), so check what actually came back rather
+    // than handing back a PNG wearing an .avif extension.
+    if (outputBlob.type !== targetType) {
+        throw new Error(`This browser can't encode ${formatName(targetType)} images. Try updating Chrome, or convert to PNG instead.`);
+    }
 
-    return btoa(binary);
+    return arrayBufferToBase64(await outputBlob.arrayBuffer());
+}
+
+function formatName(mimeType) {
+    return { 'image/png': 'PNG', 'image/webp': 'WebP', 'image/avif': 'AVIF' }[mimeType] || mimeType;
 }
 
 /**

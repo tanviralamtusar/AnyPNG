@@ -1,29 +1,61 @@
+// Local (offscreen-canvas) image conversion targets. `download_<key>` is the
+// context-menu id for each; `lossy` decides whether the saved quality setting applies.
+const IMAGE_FORMATS = {
+    png:  { name: "PNG",  label: "Convert to PNG (Local)",  mimeType: "image/png",  ext: "png",  lossy: false },
+    webp: { name: "WebP", label: "Convert to WebP (Local)", mimeType: "image/webp", ext: "webp", lossy: true },
+    avif: { name: "AVIF", label: "Convert to AVIF (Local)", mimeType: "image/avif", ext: "avif", lossy: true },
+};
+
+// Quality passed to the canvas encoder for lossy targets. 1 makes Chrome pick
+// lossless WebP; AVIF stays lossy at every value.
+const DEFAULT_CONVERSION_QUALITY = 0.9;
+
+// "download_png" -> "png"; returns null for anything that isn't a local
+// conversion item (notably "download_video", which shares the prefix).
+function imageFormatFromMenuId(menuItemId) {
+    if (typeof menuItemId !== "string" || !menuItemId.startsWith("download_")) return null;
+    const key = menuItemId.slice("download_".length);
+    return IMAGE_FORMATS[key] ? key : null;
+}
+
+async function getConversionQuality() {
+    const { conversionQuality } = await chrome.storage.sync.get("conversionQuality");
+    const quality = Number(conversionQuality);
+    return Number.isFinite(quality) && quality > 0 && quality <= 1 ? quality : DEFAULT_CONVERSION_QUALITY;
+}
+
 // Create the Right-Click Menus
 chrome.runtime.onInstalled.addListener(() => {
-    chrome.contextMenus.create({ id: "pro_image_tools", title: "AnyPNG", contexts: ["image"] });
-    chrome.contextMenus.create({ id: "download_png", title: "Convert to PNG (Local)", parentId: "pro_image_tools", contexts: ["image"] });
-    chrome.contextMenus.create({ id: "upscale_png", title: "✨ Upscale & Download", parentId: "pro_image_tools", contexts: ["image"] });
-    chrome.contextMenus.create({ id: "watermark_png", title: "💎 Remove Watermark (Pro)", parentId: "pro_image_tools", contexts: ["image"] });
-    chrome.contextMenus.create({ id: "remove_bg_png", title: "✂️ Remove Background", parentId: "pro_image_tools", contexts: ["image"] });
+    // removeAll first: on an extension update the previously registered items are
+    // still around, and re-creating an existing id fails with "duplicate id".
+    chrome.contextMenus.removeAll(() => {
+        chrome.contextMenus.create({ id: "pro_image_tools", title: "AnyPNG", contexts: ["image"] });
+        Object.entries(IMAGE_FORMATS).forEach(([key, { label }]) => {
+            chrome.contextMenus.create({ id: `download_${key}`, title: label, parentId: "pro_image_tools", contexts: ["image"] });
+        });
+        chrome.contextMenus.create({ id: "upscale_png", title: "✨ Upscale & Download", parentId: "pro_image_tools", contexts: ["image"] });
+        chrome.contextMenus.create({ id: "watermark_png", title: "💎 Remove Watermark (Pro)", parentId: "pro_image_tools", contexts: ["image"] });
+        chrome.contextMenus.create({ id: "remove_bg_png", title: "✂️ Remove Background", parentId: "pro_image_tools", contexts: ["image"] });
 
-    // Generic direct-src video download — works for plain <video src> sites.
-    // Hidden (via onShown below) on the platforms that get the quality submenu instead.
-    chrome.contextMenus.create({ id: "download_video", title: "⬇️ Download Video (AnyPNG)", contexts: ["video"] });
+        // Generic direct-src video download — works for plain <video src> sites.
+        // Hidden (via onShown below) on the platforms that get the quality submenu instead.
+        chrome.contextMenus.create({ id: "download_video", title: "⬇️ Download Video (AnyPNG)", contexts: ["video"] });
 
-    // Quality-picker submenu for the four platforms with dedicated client-side handling.
-    chrome.contextMenus.create({
-        id: "video_download_tools",
-        title: "🎬 Download Video",
-        contexts: ["page", "video"],
-        documentUrlPatterns: VIDEO_PLATFORM_MATCH_PATTERNS,
-    });
-    VIDEO_QUALITY_OPTIONS.forEach(({ id, label }) => {
+        // Quality-picker submenu for the four platforms with dedicated client-side handling.
         chrome.contextMenus.create({
-            id: `video_quality_${id}`,
-            title: label,
-            parentId: "video_download_tools",
+            id: "video_download_tools",
+            title: "🎬 Download Video",
             contexts: ["page", "video"],
             documentUrlPatterns: VIDEO_PLATFORM_MATCH_PATTERNS,
+        });
+        VIDEO_QUALITY_OPTIONS.forEach(({ id, label }) => {
+            chrome.contextMenus.create({
+                id: `video_quality_${id}`,
+                title: label,
+                parentId: "video_download_tools",
+                contexts: ["page", "video"],
+                documentUrlPatterns: VIDEO_PLATFORM_MATCH_PATTERNS,
+            });
         });
     });
 });
@@ -498,21 +530,29 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     }
 
     // ==========================================
-    // 🔄 LOCAL TOOL: PNG CONVERSION
+    // 🔄 LOCAL TOOL: PNG / WEBP / AVIF CONVERSION
     // ==========================================
-    else if (info.menuItemId === "download_png") {
+    else if (imageFormatFromMenuId(info.menuItemId)) {
+        const format = IMAGE_FORMATS[imageFormatFromMenuId(info.menuItemId)];
         try {
-            toggleLoadingScreen(tab.id, true, "Converting image to PNG locally...");
+            toggleLoadingScreen(tab.id, true, `Converting image to ${format.name} locally...`);
             const response = await fetch(info.srcUrl);
             const blob = await response.blob();
             const fullDataUrl = await blobToDataUrl(blob);
             const base64Data = fullDataUrl.split(',')[1];
 
             await setupOffscreenDocument('pages/offscreen.html');
-            const result = await chrome.runtime.sendMessage({ target: 'offscreen', action: 'convertToPng', data: base64Data, mimeType: blob.type });
+            const result = await chrome.runtime.sendMessage({
+                target: 'offscreen',
+                action: 'convertImage',
+                data: base64Data,
+                mimeType: blob.type,
+                targetType: format.mimeType,
+                quality: format.lossy ? await getConversionQuality() : undefined
+            });
 
             if (result.error) throw new Error(result.error);
-            chrome.downloads.download({ url: `data:image/png;base64,${result.data}`, filename: `AnyPNG_Converted_${Date.now()}.png` });
+            chrome.downloads.download({ url: `data:${format.mimeType};base64,${result.data}`, filename: `AnyPNG_Converted_${Date.now()}.${format.ext}` });
 
         } catch (error) {
             chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Conversion Failed', message: error.message });
