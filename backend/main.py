@@ -105,12 +105,36 @@ def run_gemini_image_edit(contents: bytes, mime_type: str, prompt: str, model: s
             config=config,
         )
     except Exception as e:
+        # The client only sees a summary; the real cause (quota, auth, model name,
+        # transport) goes to the server log so a 502 is diagnosable after the fact.
+        print(f"[ai] generate_content failed model={model!r}: {type(e).__name__}: {e}")
         raise HTTPException(status_code=502, detail=f"AI Error: {str(e)}")
 
-    for part in response.candidates[0].content.parts:
+    # A safety block comes back as zero candidates — indexing straight into [0] would
+    # turn that into an unhandled 500 instead of a useful message.
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        print(f"[ai] no candidates returned model={model!r} "
+              f"prompt_feedback={getattr(response, 'prompt_feedback', None)!r}")
+        raise HTTPException(
+            status_code=502,
+            detail="The AI model returned no result. The image may have been rejected by a content filter.",
+        )
+
+    parts = getattr(candidates[0].content, "parts", None) or []
+    for part in parts:
         if part.inline_data:
             return Response(content=part.inline_data.data, media_type="image/png")
 
+    # Reached when the model replied with text instead of an image — usually a refusal
+    # or a truncated response. Log why, plus whatever it said, since that is the single
+    # most useful clue and is not visible anywhere else.
+    finish_reason = getattr(candidates[0], "finish_reason", None)
+    said = " ".join(
+        (part.text or "").strip() for part in parts if getattr(part, "text", None)
+    ).strip()
+    print(f"[ai] no image in response model={model!r} finish_reason={finish_reason!r} "
+          f"parts={len(parts)} text={said[:300]!r}")
     raise HTTPException(status_code=502, detail="No image returned by the AI model.")
 
 
