@@ -246,6 +246,13 @@ def _log_available_formats(url: str, cookiefile: str | None) -> None:
         "no_warnings": True,
         "skip_download": True,
         "socket_timeout": 30,
+        # Without these two this diagnostic hits the very error it exists to explain:
+        # extract_info still runs format selection and raises "Requested format is not
+        # available" (YoutubeDL.py ~3096), and formats flagged has_drm/__needs_testing
+        # are live-tested and dropped before we can see them (~2540). We want the raw
+        # list, including the ones that were rejected.
+        "ignore_no_formats_error": True,
+        "allow_unplayable_formats": True,
     }
     if cookiefile and os.path.isfile(cookiefile):
         opts["cookiefile"] = cookiefile
@@ -262,10 +269,20 @@ def _log_available_formats(url: str, cookiefile: str | None) -> None:
         print(f"[download-video] could not list formats: {type(e).__name__}: {e}")
         return
 
-    formats = info.get("formats") or []
-    print(f"[download-video] {len(formats)} format(s) offered "
-          f"(live={info.get('is_live')}, duration={info.get('duration')}):")
+    formats = (info or {}).get("formats") or []
+    print(f"[download-video] {len(formats)} raw format(s) offered "
+          f"(live={(info or {}).get('is_live')}, "
+          f"upload_date={(info or {}).get('upload_date')}, "
+          f"duration={(info or {}).get('duration')}):")
     for f in formats:
+        # drm/testing are the decisive columns: a format carrying either is live-tested
+        # by yt-dlp and silently discarded when the test fails, which is what leaves
+        # the selector with nothing to match.
+        flags = []
+        if f.get("has_drm"):
+            flags.append("DRM")
+        if f.get("__needs_testing"):
+            flags.append("NEEDS_TESTING")
         print("    " + "  ".join(str(x) for x in (
             f.get("format_id"),
             f.get("ext"),
@@ -273,7 +290,8 @@ def _log_available_formats(url: str, cookiefile: str | None) -> None:
             f"v={f.get('vcodec')}",
             f"a={f.get('acodec')}",
             f"proto={f.get('protocol')}",
-        )))
+            ("flags=" + ",".join(flags)) if flags else "",
+        )).rstrip())
 
 
 def _format_for_quality(quality: str) -> str:
