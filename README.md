@@ -15,7 +15,7 @@
 - **AI Upscaling**: Choice between **2x Dynamic** (Balanced) and **4x Ultra** (HD Quality) scaling.
 - **Background Removal**: Cleanly extract subjects from any background with one click.
 - **Watermark Removal**: Seamlessly erase watermarks from images. Supports **Gemini 1.5 Flash** for advanced AI-driven removal.
-- **Local Format Conversion**: Convert any web image to **PNG**, **WebP**, or **AVIF** locally using Offscreen Canvas — no upload, no server. Quality for the lossy formats is configurable in Settings (AVIF encoding requires Chrome 124+).
+- **Local Format Conversion**: Convert any web image to **PNG**, **WebP**, or **AVIF** locally using Offscreen Canvas — no upload, no server. Quality for the lossy formats is configurable in Settings.
 - **Loading Overlay**: A beautiful glass-morphism loading screen appears during AI processing to keep you informed.
 - **API Connection Tester**: Easily verify your server connection directly from the settings page.
 - **Modern UI**: A premium, glassmorphism-inspired settings page for easy configuration.

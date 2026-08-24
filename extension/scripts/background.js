@@ -159,6 +159,55 @@ const VIDEO_QUALITY_OPTIONS = [
     { id: "audio", label: "Audio Only (MP3)" },
 ];
 
+// Cookie auth for the server-side fallback. YouTube only: it's the only platform
+// whose backend path hits a bot-check wall ("Sign in to confirm you're not a bot"),
+// because the server runs from a datacenter IP while the client-side steps run from
+// the user's own. Deliberately excludes google.com — those cookies unlock the whole
+// Google account, not just YouTube.
+const PLATFORM_COOKIE_DOMAINS = { youtube: ["youtube.com"] };
+
+const NETSCAPE_COOKIE_HEADER = "# Netscape HTTP Cookie File";
+
+async function hasCookiePermission() {
+    try {
+        return await chrome.permissions.contains({ permissions: ["cookies"] });
+    } catch (e) {
+        return false;
+    }
+}
+
+// Serializes the user's cookies for `platform` into the Netscape format yt-dlp reads.
+// Returns null whenever we shouldn't or can't produce one — the caller treats that as
+// "no cookie retry available" rather than an error.
+async function buildNetscapeCookieFile(platform) {
+    const domains = PLATFORM_COOKIE_DOMAINS[platform];
+    if (!domains) return null;
+    if (!(await hasCookiePermission())) return null;
+
+    const rows = [];
+    for (const domain of domains) {
+        // The `domain` filter already matches subdomains (www./m./.youtube.com).
+        const cookies = await chrome.cookies.getAll({ domain });
+        for (const c of cookies) {
+            // A tab or newline in a name/value would shift every later field and
+            // produce a file yt-dlp silently mis-parses. Drop those rows instead.
+            if (/[\t\r\n]/.test(c.name) || /[\t\r\n]/.test(c.value)) continue;
+            rows.push([
+                c.domain,
+                c.hostOnly ? "FALSE" : "TRUE",
+                c.path,
+                c.secure ? "TRUE" : "FALSE",
+                Math.floor(c.expirationDate || 0), // session cookies -> 0
+                c.name,
+                c.value,
+            ].join("\t"));
+        }
+    }
+
+    if (rows.length === 0) return null;
+    return `${NETSCAPE_COOKIE_HEADER}\n${rows.join("\n")}\n`;
+}
+
 function matchesAnyHost(hostname, hosts) {
     hostname = (hostname || "").toLowerCase();
     return hosts.some(h => hostname === h || hostname.endsWith("." + h));
@@ -275,6 +324,7 @@ function notifyVideoDownloadSource(sourceLabel) {
         captured: "Downloaded directly ✓",
         remuxed: "Downloaded & merged locally ✓",
         server: "Downloaded via server ✓",
+        serverAuth: "Downloaded via server (signed in) ✓",
     };
     chrome.runtime.sendMessage({ action: "VIDEO_DOWNLOAD_STATUS", label: labels[sourceLabel] || "Downloaded ✓" }).catch(() => { });
 }
@@ -341,12 +391,14 @@ async function downloadAndRemux(videoUrl, audioUrl, platform) {
     notifyVideoDownloadSource("remuxed");
 }
 
-async function downloadViaBackend(tab, quality, platform) {
-    toggleLoadingScreen(tab.id, true, "Downloading via server...");
-
+// Posts one download attempt. Returns { ok: true, blob } on success, or
+// { ok: false, code, message } on failure — `code` is the backend's structured
+// error code when it sent one ("auth_required"), otherwise null.
+async function postVideoDownload(url, quality, cookiesText) {
     const formData = new FormData();
-    formData.append('url', tab.url);
+    formData.append('url', url);
     formData.append('quality', quality || 'best');
+    if (cookiesText) formData.append('cookies', cookiesText);
 
     const apiRes = await fetch(`${API_CONFIG.url}/download-video`, {
         method: 'POST',
@@ -354,22 +406,64 @@ async function downloadViaBackend(tab, quality, platform) {
         body: formData,
     });
 
-    if (!apiRes.ok) {
-        // statusText is frequently empty on HTTP/2 responses in Chrome, so fall back
-        // to the numeric status (and a snippet of the raw body if it wasn't JSON) —
-        // otherwise failures collapse into an unhelpful bare "Server error:".
-        const rawBody = await apiRes.text().catch(() => "");
-        let detail = null;
-        try { detail = JSON.parse(rawBody).detail; } catch (e) { /* not JSON */ }
-        const bodySnippet = rawBody && !detail ? ` — ${rawBody.slice(0, 200)}` : "";
-        throw new Error(detail || `Server error: HTTP ${apiRes.status} ${apiRes.statusText}${bodySnippet}`);
+    if (apiRes.ok) return { ok: true, blob: await apiRes.blob() };
+
+    // statusText is frequently empty on HTTP/2 responses in Chrome, so fall back
+    // to the numeric status (and a snippet of the raw body if it wasn't JSON) —
+    // otherwise failures collapse into an unhelpful bare "Server error:".
+    const rawBody = await apiRes.text().catch(() => "");
+    let detail = null;
+    try { detail = JSON.parse(rawBody).detail; } catch (e) { /* not JSON */ }
+
+    // FastAPI's `detail` is a plain string almost everywhere, but /download-video
+    // returns an object for errors the client can act on. Without this, an object
+    // detail would stringify into a useless "[object Object]".
+    let code = null;
+    let message = null;
+    if (detail && typeof detail === 'object') {
+        code = detail.code || null;
+        message = detail.message || null;
+    } else if (typeof detail === 'string') {
+        message = detail;
     }
 
-    const blob = await apiRes.blob();
-    const dataUrl = await blobToDataUrl(blob);
+    const bodySnippet = rawBody && !message ? ` — ${rawBody.slice(0, 200)}` : "";
+    return {
+        ok: false,
+        code,
+        message: message || `Server error: HTTP ${apiRes.status} ${apiRes.statusText}${bodySnippet}`,
+    };
+}
+
+async function downloadViaBackend(tab, quality, platform) {
+    toggleLoadingScreen(tab.id, true, "Downloading via server...");
+
+    let result = await postVideoDownload(tab.url, quality, null);
+    let usedCookies = false;
+
+    // The server hit a sign-in wall. It runs from a datacenter IP, so YouTube asks
+    // it to prove it isn't a bot even though the user is signed in right here. Retry
+    // once with the user's own cookies — but only if they opted in AND the optional
+    // permission is actually held. Never escalate silently.
+    if (!result.ok && result.code === 'auth_required') {
+        const { enableCookieAuth } = await chrome.storage.local.get('enableCookieAuth');
+        const cookiesText = enableCookieAuth ? await buildNetscapeCookieFile(platform) : null;
+
+        if (cookiesText) {
+            toggleLoadingScreen(tab.id, true, "Retrying with your sign-in...");
+            result = await postVideoDownload(tab.url, quality, cookiesText);
+            usedCookies = true;
+        } else if (!enableCookieAuth) {
+            throw new Error(`${result.message} You can enable "Use my YouTube sign-in for server downloads" in AnyPNG settings to retry these automatically.`);
+        }
+    }
+
+    if (!result.ok) throw new Error(result.message);
+
+    const dataUrl = await blobToDataUrl(result.blob);
     const ext = quality === 'audio' ? 'mp3' : 'mp4';
     chrome.downloads.download({ url: dataUrl, filename: `AnyPNG_${platform}_${Date.now()}.${ext}` });
-    notifyVideoDownloadSource("server");
+    notifyVideoDownloadSource(usedCookies ? "serverAuth" : "server");
 }
 
 // Step 1: real <video> src if not blob-based. Step 2: nudge playback, then check

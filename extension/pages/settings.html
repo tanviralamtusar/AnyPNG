@@ -101,7 +101,7 @@
           <div class="setting-control">
             <div class="select-wrapper">
               <select id="conversionQuality">
-                <option value="1">Maximum (lossless WebP)</option>
+                <option value="1">Maximum (lossless)</option>
                 <option value="0.9">High (Default)</option>
                 <option value="0.8">Balanced</option>
                 <option value="0.6">Small File</option>
@@ -136,6 +136,25 @@
           <div class="setting-control">
             <label class="switch">
               <input type="checkbox" id="enableAdvancedPrompt">
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <label>Use my YouTube sign-in for server downloads</label>
+            <p class="description">
+              If a YouTube download fails because the server is asked to sign in, retry it
+              using your browser&rsquo;s YouTube cookies. Those cookies are sent to the AnyPNG
+              server for that one download and are not stored. Only youtube.com cookies are
+              read &mdash; never your wider Google account. Off by default.
+            </p>
+            <p class="description" id="cookieAuthStatus"></p>
+          </div>
+          <div class="setting-control">
+            <label class="switch">
+              <input type="checkbox" id="enableCookieAuth">
               <span class="slider"></span>
             </label>
           </div>

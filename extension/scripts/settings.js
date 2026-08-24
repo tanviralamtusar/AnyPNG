@@ -47,6 +47,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
+    // Reconcile the cookie-auth toggle against the permission actually held: the
+    // user can revoke "cookies" from chrome://extensions at any time, and the stored
+    // flag alone would then lie about what the extension can do.
+    (async () => {
+        const { enableCookieAuth } = await chrome.storage.local.get('enableCookieAuth');
+        const granted = await chrome.permissions.contains({ permissions: ['cookies'] });
+        const on = !!enableCookieAuth && granted;
+        document.getElementById('enableCookieAuth').checked = on;
+        if (enableCookieAuth && !granted) await chrome.storage.local.set({ enableCookieAuth: false });
+    })();
+
     // Load local settings (theme)
     chrome.storage.local.get(['theme', 'supabaseSession'], async (data) => {
         const profileSection = document.getElementById('profile-section');
@@ -273,6 +284,45 @@ document.getElementById('updateProfileBtn')?.addEventListener('click', async () 
         btn.disabled = false;
         setTimeout(() => { status.innerText = ''; }, 3000);
     }
+});
+
+// Cookie auth toggle. Deliberately NOT part of the saveBtn batch: requesting an
+// optional permission needs a real user gesture, which only exists inside this
+// handler. Stored in storage.local rather than sync because the permission grant is
+// per-device — a synced flag would read "on" where it was never granted.
+document.getElementById('enableCookieAuth')?.addEventListener('change', async (e) => {
+    const status = document.getElementById('cookieAuthStatus');
+    const checkbox = e.target;
+
+    if (checkbox.checked) {
+        let granted = false;
+        try {
+            granted = await chrome.permissions.request({ permissions: ['cookies'] });
+        } catch (err) {
+            console.error('Cookie permission request failed:', err);
+        }
+        if (!granted) {
+            checkbox.checked = false;
+            await chrome.storage.local.set({ enableCookieAuth: false });
+            status.innerText = 'Permission declined — leaving this off.';
+            status.style.color = 'var(--text-muted)';
+            return;
+        }
+        await chrome.storage.local.set({ enableCookieAuth: true });
+        status.innerText = 'On. Your YouTube cookies will be sent only when a server download hits a sign-in wall.';
+        status.style.color = 'var(--accent)';
+        return;
+    }
+
+    await chrome.storage.local.set({ enableCookieAuth: false });
+    // Hand the permission back so the extension can't read cookies while off.
+    try {
+        await chrome.permissions.remove({ permissions: ['cookies'] });
+    } catch (err) {
+        console.error('Cookie permission removal failed:', err);
+    }
+    status.innerText = 'Off. Cookies will never be sent.';
+    status.style.color = 'var(--text-muted)';
 });
 
 // Theme toggle

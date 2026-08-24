@@ -147,7 +147,35 @@ def _is_allowed_video_url(url: str) -> bool:
 # YouTube session) used to get past YouTube's bot-check on datacenter/VPS IPs
 # ("Sign in to confirm you're not a bot"). Not required — yt-dlp just works without
 # it for sites/videos that don't trigger that check.
+#
+# This is the server-wide fallback. The extension can also supply the signed-in
+# user's own cookies per request (see the `cookies` form field below), which takes
+# precedence and avoids one operator account's cookies serving every user.
 YTDLP_COOKIES_FILE = os.getenv("YTDLP_COOKIES_FILE", "/app/cookies/cookies.txt")
+
+# Bounds the `cookies` form field. The endpoint is reachable by anyone holding the
+# (client-side, therefore extractable) SECRET_TOKEN, so this cap is load-bearing.
+MAX_COOKIES_BYTES = 64 * 1024
+
+NETSCAPE_COOKIE_HEADER = "# Netscape HTTP Cookie File"
+
+# Substrings that mark a yt-dlp failure as "needs a signed-in session" rather than a
+# generic failure. Matching one is what tells the extension it's worth retrying with
+# the user's own cookies — anything else stays a plain 422.
+AUTH_WALL_MARKERS = (
+    "sign in to confirm",
+    "confirm you're not a bot",
+    "this video is only available to",
+    "sign in to view",
+    "login required",
+    "private video",
+    "account cookies",
+)
+
+
+def _is_auth_wall(message: str) -> bool:
+    lowered = message.lower()
+    return any(marker in lowered for marker in AUTH_WALL_MARKERS)
 
 
 def _format_for_quality(quality: str) -> str:
@@ -158,8 +186,12 @@ def _format_for_quality(quality: str) -> str:
     return "bestvideo*+bestaudio/best"
 
 
-def _run_ytdlp_download(url: str, quality: str, out_dir: str) -> str:
-    """Blocking call — must be run off the event loop. Returns the downloaded file path."""
+def _run_ytdlp_download(url: str, quality: str, out_dir: str, cookiefile: str | None = None) -> str:
+    """Blocking call — must be run off the event loop. Returns the downloaded file path.
+
+    `cookiefile` is a per-request Netscape cookie file supplied by the caller; when
+    absent, fall back to the server-wide YTDLP_COOKIES_FILE.
+    """
     ydl_opts = {
         "format": _format_for_quality(quality),
         "outtmpl": os.path.join(out_dir, "%(title).100s.%(ext)s"),
@@ -171,7 +203,10 @@ def _run_ytdlp_download(url: str, quality: str, out_dir: str) -> str:
         "retries": 3,
         "restrictfilenames": True,
     }
-    if os.path.isfile(YTDLP_COOKIES_FILE):
+    # Per-request (the signed-in user's own cookies) wins over the server-wide file.
+    if cookiefile and os.path.isfile(cookiefile):
+        ydl_opts["cookiefile"] = cookiefile
+    elif os.path.isfile(YTDLP_COOKIES_FILE):
         ydl_opts["cookiefile"] = YTDLP_COOKIES_FILE
     if quality == "audio":
         ydl_opts["postprocessors"] = [{
@@ -196,6 +231,10 @@ def _run_ytdlp_download(url: str, quality: str, out_dir: str) -> str:
 async def download_video(
     url: str = Form(...),
     quality: str = Form("best"),
+    # Optional Netscape-format cookie file contents, supplied by the extension on a
+    # retry after this endpoint reported `auth_required`. Held on disk only for the
+    # duration of the download, and never logged.
+    cookies: str = Form(""),
 ):
     if not _is_allowed_video_url(url):
         raise HTTPException(status_code=400, detail="Unsupported video URL. Supported: YouTube, Instagram, Facebook, TikTok.")
@@ -203,21 +242,50 @@ async def download_video(
     if quality not in ("best", "1080", "720", "480", "audio"):
         quality = "best"
 
+    cookies = cookies.strip()
+    if cookies:
+        if len(cookies.encode("utf-8")) > MAX_COOKIES_BYTES:
+            raise HTTPException(status_code=400, detail="Cookie data too large.")
+        if not cookies.startswith(NETSCAPE_COOKIE_HEADER):
+            raise HTTPException(status_code=400, detail="Cookie data must be a Netscape-format cookie file.")
+
     out_dir = tempfile.mkdtemp(prefix="anypng_video_")
 
+    # Deliberately NOT inside out_dir: that directory outlives this handler (the
+    # FileResponse streams from it and a BackgroundTask cleans it up afterwards),
+    # whereas the cookie file must be gone the moment the download finishes.
+    cookiefile = None
+    if cookies:
+        # mkstemp already creates the file readable/writable only by this user.
+        fd, cookiefile = tempfile.mkstemp(prefix="anypng_cookies_", suffix=".txt")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(cookies if cookies.endswith("\n") else cookies + "\n")
+
     try:
-        filepath = await asyncio.to_thread(_run_ytdlp_download, url, quality, out_dir)
+        filepath = await asyncio.to_thread(_run_ytdlp_download, url, quality, out_dir, cookiefile)
     except yt_dlp.utils.DownloadError as e:
         # The client only gets a generic message, but the real yt-dlp error (bot
         # checks, geo-block, sign-in walls, format changes, etc.) is logged here so
         # it's visible in server logs instead of silently disappearing.
         print(f"[download-video] yt-dlp DownloadError for url={url!r} quality={quality!r}: {e}")
         shutil.rmtree(out_dir, ignore_errors=True)
+        # Only worth telling the client to retry with cookies if it hasn't already.
+        if not cookiefile and _is_auth_wall(str(e)):
+            raise HTTPException(status_code=422, detail={
+                "code": "auth_required",
+                "message": "This video requires a signed-in YouTube session.",
+            }) from e
         raise HTTPException(status_code=422, detail="Could not download this video. It may be private, age-restricted, or removed.") from e
     except Exception as e:
         print(f"[download-video] Unexpected error for url={url!r} quality={quality!r}: {e}")
         shutil.rmtree(out_dir, ignore_errors=True)
         raise HTTPException(status_code=502, detail=f"Video download failed: {str(e)}") from e
+    finally:
+        if cookiefile:
+            try:
+                os.remove(cookiefile)
+            except OSError:
+                pass
 
     if not filepath or not os.path.exists(filepath):
         shutil.rmtree(out_dir, ignore_errors=True)
