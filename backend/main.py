@@ -219,11 +219,73 @@ def _is_auth_wall(message: str) -> bool:
     return any(marker in lowered for marker in AUTH_WALL_MARKERS)
 
 
+# YouTube's SABR streaming leaves some player clients with no downloadable formats,
+# and passing cookies pins yt-dlp to the clients most affected. The working set moves
+# over time, so make it tunable without a rebuild: set e.g.
+#   YTDLP_PLAYER_CLIENTS=default,tv
+# Empty (the default) leaves yt-dlp's own choice alone.
+YTDLP_PLAYER_CLIENTS = os.getenv("YTDLP_PLAYER_CLIENTS", "").strip()
+
+
+def _extractor_args() -> dict | None:
+    if not YTDLP_PLAYER_CLIENTS:
+        return None
+    clients = [c.strip() for c in YTDLP_PLAYER_CLIENTS.split(",") if c.strip()]
+    return {"youtube": {"player_client": clients}} if clients else None
+
+
+def _is_format_error(message: str) -> bool:
+    return "requested format is not available" in message.lower()
+
+
+def _log_available_formats(url: str, cookiefile: str | None) -> None:
+    """Diagnostic only. A format error says nothing about WHY, so do one metadata-only
+    extraction and print what YouTube actually offered. Runs on this error path alone."""
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "socket_timeout": 30,
+    }
+    if cookiefile and os.path.isfile(cookiefile):
+        opts["cookiefile"] = cookiefile
+    elif os.path.isfile(YTDLP_COOKIES_FILE):
+        opts["cookiefile"] = YTDLP_COOKIES_FILE
+    extractor_args = _extractor_args()
+    if extractor_args:
+        opts["extractor_args"] = extractor_args
+
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:
+        print(f"[download-video] could not list formats: {type(e).__name__}: {e}")
+        return
+
+    formats = info.get("formats") or []
+    print(f"[download-video] {len(formats)} format(s) offered "
+          f"(live={info.get('is_live')}, duration={info.get('duration')}):")
+    for f in formats:
+        print("    " + "  ".join(str(x) for x in (
+            f.get("format_id"),
+            f.get("ext"),
+            f.get("resolution") or f.get("format_note"),
+            f"v={f.get('vcodec')}",
+            f"a={f.get('acodec')}",
+            f"proto={f.get('protocol')}",
+        )))
+
+
 def _format_for_quality(quality: str) -> str:
     if quality == "audio":
         return "bestaudio/best"
     if quality in ("1080", "720", "480"):
-        return f"bestvideo[height<={quality}]+bestaudio/best[height<={quality}]/best[height<={quality}]"
+        # Final bare "best" so a video with nothing at or below the cap degrades to
+        # whatever exists instead of failing outright.
+        return (
+            f"bestvideo[height<={quality}]+bestaudio/best[height<={quality}]"
+            f"/best[height<={quality}]/best"
+        )
     return "bestvideo*+bestaudio/best"
 
 
@@ -244,6 +306,9 @@ def _run_ytdlp_download(url: str, quality: str, out_dir: str, cookiefile: str | 
         "retries": 3,
         "restrictfilenames": True,
     }
+    extractor_args = _extractor_args()
+    if extractor_args:
+        ydl_opts["extractor_args"] = extractor_args
     # Per-request (the signed-in user's own cookies) wins over the server-wide file.
     if cookiefile and os.path.isfile(cookiefile):
         ydl_opts["cookiefile"] = cookiefile
@@ -320,6 +385,15 @@ async def download_video(
                 "code": "auth_required",
                 "message": "This video requires a signed-in YouTube session.",
             }) from e
+        if _is_format_error(str(e)):
+            # Extraction worked (we got past any sign-in wall) but nothing matched the
+            # selector. Show what was on offer — that is the only way to tell a SABR
+            # restriction from a live stream from a genuinely odd video.
+            _log_available_formats(url, cookiefile)
+            raise HTTPException(
+                status_code=422,
+                detail="No downloadable format was available for this video. It may be a live stream or restricted by YouTube.",
+            ) from e
         if cookiefile:
             print("[download-video] failed even WITH client-supplied cookies — they may be expired or from a signed-out profile")
         raise HTTPException(status_code=422, detail="Could not download this video. It may be private, age-restricted, or removed.") from e
