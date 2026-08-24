@@ -123,6 +123,15 @@ const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
     reader.readAsDataURL(blob);
 });
 
+// A wasm AVIF encode of a large image runs for tens of seconds, and an MV3
+// service worker is torn down after 30s without activity — which would strand
+// the caller's promise and leave the loading overlay up forever. Calling a
+// trivial extension API on an interval resets that idle timer while we wait.
+function withServiceWorkerKeepalive(promise) {
+    const timer = setInterval(() => chrome.runtime.getPlatformInfo(), 20000);
+    return promise.finally(() => clearInterval(timer));
+}
+
 async function setupOffscreenDocument(path) {
     const existingContexts = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'], documentUrls: [chrome.runtime.getURL(path)] });
     if (existingContexts.length > 0) return;
@@ -636,14 +645,14 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             const base64Data = fullDataUrl.split(',')[1];
 
             await setupOffscreenDocument('pages/offscreen.html');
-            const result = await chrome.runtime.sendMessage({
+            const result = await withServiceWorkerKeepalive(chrome.runtime.sendMessage({
                 target: 'offscreen',
                 action: 'convertImage',
                 data: base64Data,
                 mimeType: blob.type,
                 targetType: format.mimeType,
                 quality: format.lossy ? await getConversionQuality() : undefined
-            });
+            }));
 
             if (result.error) throw new Error(result.error);
             chrome.downloads.download({ url: `data:${format.mimeType};base64,${result.data}`, filename: `AnyPNG_Converted_${Date.now()}.${format.ext}` });
