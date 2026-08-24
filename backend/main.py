@@ -114,9 +114,14 @@ def run_gemini_image_edit(contents: bytes, mime_type: str, prompt: str, model: s
     raise HTTPException(status_code=502, detail="No image returned by the AI model.")
 
 
+# Bumped when the client-visible contract changes, so /ping can confirm what is
+# actually deployed instead of inferring it from download behaviour.
+API_FEATURES = ["cookie_auth"]
+
+
 @app.get("/ping")
 async def ping():
-    return {"status": "success", "message": "API is Live!"}
+    return {"status": "success", "message": "API is Live!", "features": API_FEATURES}
 
 
 # 🎬 VIDEO DOWNLOAD (yt-dlp fallback for the extension's client-side capture cascade)
@@ -272,6 +277,9 @@ async def download_video(
         fd, cookiefile = tempfile.mkstemp(prefix="anypng_cookies_", suffix=".txt")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(cookies if cookies.endswith("\n") else cookies + "\n")
+        # Size and count only. The cookie values are credentials and are never logged.
+        print(f"[download-video] using client-supplied cookies ({len(cookies)} bytes, "
+              f"{cookies.count(chr(10))} lines) for url={url!r}")
 
     try:
         filepath = await asyncio.to_thread(_run_ytdlp_download, url, quality, out_dir, cookiefile)
@@ -283,10 +291,13 @@ async def download_video(
         shutil.rmtree(out_dir, ignore_errors=True)
         # Only worth telling the client to retry with cookies if it hasn't already.
         if not cookiefile and _is_auth_wall(str(e)):
+            print("[download-video] auth wall detected -> returning auth_required so the client can retry with cookies")
             raise HTTPException(status_code=422, detail={
                 "code": "auth_required",
                 "message": "This video requires a signed-in YouTube session.",
             }) from e
+        if cookiefile:
+            print("[download-video] failed even WITH client-supplied cookies — they may be expired or from a signed-out profile")
         raise HTTPException(status_code=422, detail="Could not download this video. It may be private, age-restricted, or removed.") from e
     except Exception as e:
         print(f"[download-video] Unexpected error for url={url!r} quality={quality!r}: {e}")

@@ -456,7 +456,13 @@ async function downloadViaBackend(tab, quality, platform) {
     // permission is actually held. Never escalate silently.
     if (!result.ok && result.code === 'auth_required') {
         const { enableCookieAuth } = await chrome.storage.local.get('enableCookieAuth');
-        const cookiesText = enableCookieAuth ? await buildNetscapeCookieFile(platform) : null;
+        const hasPermission = await hasCookiePermission();
+        const cookiesText = enableCookieAuth && hasPermission
+            ? await buildNetscapeCookieFile(platform)
+            : null;
+
+        console.log('[AnyPNG] Server reported auth_required.',
+            { enableCookieAuth: !!enableCookieAuth, hasPermission, gotCookies: !!cookiesText, platform });
 
         if (cookiesText) {
             toggleLoadingScreen(tab.id, true, "Retrying with your sign-in...");
@@ -464,6 +470,13 @@ async function downloadViaBackend(tab, quality, platform) {
             usedCookies = true;
         } else if (!enableCookieAuth) {
             throw new Error(`${result.message} You can enable "Use my YouTube sign-in for server downloads" in AnyPNG settings to retry these automatically.`);
+        } else if (!hasPermission) {
+            // Opted in, but the cookies permission was never granted or has since been
+            // revoked from chrome://extensions. Without this the user would just see the
+            // bare server message and have no idea why the retry never happened.
+            throw new Error(`${result.message} AnyPNG needs cookie access to retry — re-enable "Use my YouTube sign-in for server downloads" in settings and accept the permission prompt.`);
+        } else {
+            throw new Error(`${result.message} No YouTube cookies were found in this browser — sign in to YouTube in this profile, then try again.`);
         }
     }
 
