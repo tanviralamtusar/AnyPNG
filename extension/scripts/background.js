@@ -611,27 +611,54 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             const scale = settings.upscaleFactor || '2';
 
             try {
-                toggleLoadingScreen(tab.id, true, "Running AI on server...");
+                toggleLoadingScreen(tab.id, true, info.menuItemId === "remove_bg_png"
+                    ? "Loading local background remover..."
+                    : "Running AI on server...");
 
                 const response = await fetch(info.srcUrl);
                 const imageBlob = await response.blob();
-                const formData = new FormData();
-                formData.append('image', imageBlob);
+                let finalBlob;
 
-                // 🟢 FIXED THE 404 ERROR HERE: Name matches the python server exactly!
-                let endpoint = info.menuItemId === "upscale_png" ? "/upscale" : "/remove-background";
-                if (info.menuItemId === "upscale_png") formData.append('scale', scale);
+                if (info.menuItemId === "remove_bg_png") {
+                    // Background removal runs on-device first. The server remains a
+                    // fallback for older browsers or devices without enough GPU/RAM.
+                    await setupOffscreenDocument('pages/offscreen.html');
+                    const dataUrl = await blobToDataUrl(imageBlob);
+                    try {
+                        const localResult = await withServiceWorkerKeepalive(chrome.runtime.sendMessage({
+                            target: 'offscreen',
+                            action: 'removeBackground',
+                            data: dataUrl.split(',')[1],
+                            mimeType: imageBlob.type
+                        }));
+                        if (localResult.error) throw new Error(localResult.error);
+                        finalBlob = await (await fetch(`data:image/png;base64,${localResult.data}`)).blob();
+                    } catch (localError) {
+                        console.warn('[AnyPNG] Local remover failed; using server fallback:', localError);
+                        toggleLoadingScreen(tab.id, true, "Local model unavailable; using server fallback...");
+                        const formData = new FormData();
+                        formData.append('image', imageBlob);
+                        const apiRes = await fetch(`${API_CONFIG.url}/remove-background`, {
+                            method: 'POST',
+                            headers: { 'Authorization': `Bearer ${API_CONFIG.basicToken}` },
+                            body: formData
+                        });
+                        if (!apiRes.ok) throw new Error(`Server Error: ${apiRes.statusText}`);
+                        finalBlob = await apiRes.blob();
+                    }
+                } else {
+                    const formData = new FormData();
+                    formData.append('image', imageBlob);
+                    formData.append('scale', scale);
+                    const apiRes = await fetch(`${API_CONFIG.url}/upscale`, {
+                        method: 'POST',
+                        headers: { 'Authorization': `Bearer ${API_CONFIG.basicToken}` },
+                        body: formData
+                    });
+                    if (!apiRes.ok) throw new Error(`Server Error: ${apiRes.statusText}`);
+                    finalBlob = await apiRes.blob();
+                }
 
-                // 🟢 FIXED THE 401 ERROR HERE: Uses Basic Token instead of Supabase Token!
-                const apiRes = await fetch(`${API_CONFIG.url}${endpoint}`, {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${API_CONFIG.basicToken}` },
-                    body: formData
-                });
-
-                if (!apiRes.ok) throw new Error(`Server Error: ${apiRes.statusText}`);
-
-                const finalBlob = await apiRes.blob();
                 const downloadUrl = await blobToDataUrl(finalBlob);
 
                 let prefix = info.menuItemId === "upscale_png" ? `AnyPNG_Upscaled_${scale}x` : `AnyPNG_Transparent`;

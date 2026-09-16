@@ -23,6 +23,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return true; // async response
     }
 
+    if (message.action === 'removeBackground') {
+        handleBackgroundRemoval(message.data, message.mimeType)
+            .then((result) => sendResponse(result))
+            .catch((error) => {
+                console.error('[Offscreen] Background removal error:', error);
+                sendResponse({ error: error.message });
+            });
+        return true;
+    }
+
     if (message.action === 'remuxVideoAudio') {
         handleRemux(message.video, message.audio)
             .then((mp4Base64) => {
@@ -37,6 +47,69 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     return false;
 });
+
+let backgroundRemoverPromise = null;
+
+async function loadBackgroundRemover() {
+    if (!backgroundRemoverPromise) {
+        backgroundRemoverPromise = (async () => {
+            const { env, pipeline } = await import(
+                chrome.runtime.getURL('scripts/transformers/transformers.min.js')
+            );
+
+            // Model weights are fetched once from Hugging Face and then kept in the
+            // browser cache. Inference remains inside this extension page.
+            env.allowLocalModels = false;
+            env.useBrowserCache = true;
+            env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('scripts/transformers/');
+
+            const useWebGPU = !!navigator.gpu;
+            try {
+                return {
+                    device: useWebGPU ? 'webgpu' : 'wasm',
+                    remover: await pipeline('background-removal', 'briaai/RMBG-1.4', {
+                        device: useWebGPU ? 'webgpu' : 'wasm',
+                        dtype: useWebGPU ? 'fp16' : 'q8'
+                    })
+                };
+            } catch (error) {
+                // Some GPUs expose WebGPU but do not support the model's FP16
+                // kernels. Retry with the portable WASM backend.
+                if (!useWebGPU) throw error;
+                console.warn('[Offscreen] WebGPU unavailable, retrying with WASM:', error);
+                return {
+                    device: 'wasm',
+                    remover: await pipeline('background-removal', 'briaai/RMBG-1.4', {
+                        device: 'wasm',
+                        dtype: 'q8'
+                    })
+                };
+            }
+        })().catch((error) => {
+            backgroundRemoverPromise = null;
+            throw error;
+        });
+    }
+    return backgroundRemoverPromise;
+}
+
+async function handleBackgroundRemoval(base64Data, mimeType = 'image/png') {
+    const raw = atob(base64Data);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+
+    const input = new Blob([bytes], { type: mimeType });
+    const { remover, device } = await loadBackgroundRemover();
+    {
+        const output = await remover(input);
+        const result = Array.isArray(output) ? output[0] : output;
+        const png = await result.toBlob('image/png');
+        return {
+            data: arrayBufferToBase64(await png.arrayBuffer()),
+            device
+        };
+    }
+}
 
 /**
  * Convert any image base64 string to PNG, WebP or AVIF.

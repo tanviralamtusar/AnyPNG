@@ -3,6 +3,7 @@ import re
 import asyncio
 import tempfile
 import shutil
+from io import BytesIO
 from urllib.parse import urlparse
 from google import genai
 from google.genai import types
@@ -12,6 +13,13 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import Response, FileResponse
 from starlette.background import BackgroundTask
 import yt_dlp
+from PIL import Image
+
+try:
+    from rembg import new_session, remove as rembg_remove
+except ImportError:  # Keep the API bootable until image dependencies are installed.
+    new_session = None
+    rembg_remove = None
 
 # Load environment variables
 load_dotenv()
@@ -141,6 +149,34 @@ def run_gemini_image_edit(contents: bytes, mime_type: str, prompt: str, model: s
 # Bumped when the client-visible contract changes, so /ping can confirm what is
 # actually deployed instead of inferring it from download behaviour.
 API_FEATURES = ["cookie_auth"]
+
+_background_session = None
+
+
+def _remove_background_with_matting(contents: bytes) -> bytes:
+    """Create a transparent PNG while preserving the input RGB pixels."""
+    global _background_session
+    if new_session is None or rembg_remove is None:
+        raise RuntimeError("rembg is not installed")
+
+    if _background_session is None:
+        model_name = os.getenv("BACKGROUND_MODEL", "u2net")
+        _background_session = new_session(model_name)
+
+    result = rembg_remove(
+        contents,
+        session=_background_session,
+        alpha_matting=True,
+        alpha_matting_foreground_threshold=240,
+        alpha_matting_background_threshold=10,
+        alpha_matting_erode_size=10,
+        post_process_mask=True,
+    )
+
+    with Image.open(BytesIO(result)) as image:
+        output = BytesIO()
+        image.convert("RGBA").save(output, format="PNG", optimize=True)
+        return output.getvalue()
 
 
 @app.get("/ping")
@@ -484,11 +520,20 @@ async def remove_background_api(
     model: str = Form(DEFAULT_AI_MODEL),
 ):
     contents = await image.read()
-    prompt = (
-        "Remove the background from this image completely, isolating the main "
-        "foreground subject. Output the subject on a fully transparent background "
-        "as a PNG with an alpha channel. Keep the subject's edges clean and natural."
-    )
-    return run_gemini_image_edit(
-        contents, _normalize_mime(image.content_type), prompt, _resolve_model(model)
-    )
+    mime_type = _normalize_mime(image.content_type)
+    try:
+        return Response(
+            content=_remove_background_with_matting(contents),
+            media_type="image/png",
+        )
+    except Exception as exc:
+        # A fresh deployment may not yet have downloaded its ONNX model.
+        print(f"[background] matting failed; falling back to Gemini: {type(exc).__name__}: {exc}")
+        prompt = (
+            "Remove the background from this image completely, isolating the main "
+            "foreground subject. Output the subject on a fully transparent background "
+            "as a PNG with an alpha channel. Keep the subject's edges clean and natural."
+        )
+        return run_gemini_image_edit(
+            contents, mime_type, prompt, _resolve_model(model)
+        )
