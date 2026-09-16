@@ -62,6 +62,14 @@ async function loadBackgroundRemover() {
             env.allowLocalModels = false;
             env.useBrowserCache = true;
             env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('scripts/transformers/');
+            // Chrome currently ignores powerPreference on Windows and logs a
+            // warning from requestAdapter(). Let the browser choose the adapter.
+            if (env.backends.onnx.webgpu) {
+                env.backends.onnx.webgpu.powerPreference = undefined;
+            }
+            // RMBG contains a few operators that ONNX Runtime may place on CPU;
+            // this is expected provider fallback, not a failed inference.
+            env.backends.onnx.logLevel = 'error';
 
             const useWebGPU = !!navigator.gpu;
             try {
