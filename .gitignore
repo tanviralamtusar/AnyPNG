@@ -8,3 +8,6 @@ YoutubeDownloader.win-x64/
 
 # Packaged extension builds
 *.zip
+public/models/*.onnx
+extension/inpaint/models/*.onnx
+*.tsbuildinfo

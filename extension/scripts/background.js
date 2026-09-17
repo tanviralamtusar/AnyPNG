@@ -29,7 +29,8 @@ chrome.runtime.onInstalled.addListener(() => {
     // removeAll first: on an extension update the previously registered items are
     // still around, and re-creating an existing id fails with "duplicate id".
     chrome.contextMenus.removeAll(() => {
-        chrome.contextMenus.create({ id: "pro_image_tools", title: "AnyPNG", contexts: ["image"] });
+        chrome.contextMenus.create({ id: "pro_image_tools", title: "AnyPNG", contexts: ["page", "image"] });
+        chrome.contextMenus.create({ id: "local_inpaint_page", title: "Open Local Inpainting Editor", parentId: "pro_image_tools", contexts: ["page"] });
         Object.entries(IMAGE_FORMATS).forEach(([key, { label }]) => {
             chrome.contextMenus.create({ id: `download_${key}`, title: label, parentId: "pro_image_tools", contexts: ["image"] });
         });
@@ -97,7 +98,77 @@ async function authorizeLocalInpaint() {
     return data;
 }
 
+async function resolveContextImageUrl(info, tab) {
+    if (info.srcUrl) return info.srcUrl;
+    if (!tab?.id) return null;
+    const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        args: [info.x, info.y],
+        func: (x, y) => {
+            const hasPoint = Number.isFinite(x) && Number.isFinite(y);
+            const pointX = hasPoint ? x : window.innerWidth / 2;
+            const pointY = hasPoint ? y : window.innerHeight / 2;
+            const element = document.elementFromPoint(pointX, pointY);
+            const urlFromBackground = (node) => {
+                for (let current = node; current && current !== document.body; current = current.parentElement) {
+                    const background = getComputedStyle(current).backgroundImage;
+                    const match = background && background.match(/url\(["']?(.*?)["']?\)/);
+                    if (match?.[1]) return match[1];
+                }
+                return null;
+            };
+            const direct = element?.closest?.('img') || (element?.tagName === 'IMG' ? element : null);
+            if (direct?.currentSrc || direct?.src) return direct.currentSrc || direct.src;
+            const backgroundUrl = urlFromBackground(element);
+            if (backgroundUrl) return backgroundUrl;
+
+            // Gallery controls and overlays often sit above the actual <img>.
+            // Pick the visible image whose box contains the click, or the nearest
+            // visible image when the click landed on a sibling overlay.
+            const candidates = [...document.images].filter(image => {
+                const box = image.getBoundingClientRect();
+                return box.width > 32 && box.height > 32 && getComputedStyle(image).visibility !== 'hidden';
+            });
+            candidates.sort((a, b) => {
+                const distance = (image) => {
+                    const box = image.getBoundingClientRect();
+                    const dx = Math.max(box.left - pointX, 0, pointX - box.right);
+                    const dy = Math.max(box.top - pointY, 0, pointY - box.bottom);
+                    const areaPenalty = hasPoint ? 0 : -box.width * box.height;
+                    return dx * dx + dy * dy + areaPenalty;
+                };
+                return distance(a) - distance(b);
+            });
+            const best = candidates[0];
+            if (best?.currentSrc || best?.src) return best.currentSrc || best.src;
+
+            // Some galleries use a div background instead of an <img>.
+            const backgrounds = [...document.querySelectorAll('*')].map(node => {
+                const box = node.getBoundingClientRect();
+                const background = getComputedStyle(node).backgroundImage;
+                const match = background && background.match(/url\(["']?(.*?)["']?\)/);
+                return { box, url: match?.[1] || null };
+            }).filter(item => item.url && item.box.width > 32 && item.box.height > 32);
+            backgrounds.sort((a, b) => b.box.width * b.box.height - a.box.width * a.box.height);
+            return backgrounds[0]?.url || null;
+        },
+    });
+    return results?.[0]?.result || null;
+}
+
 // 🔒 API CONFIGURATION
+async function resolveContextImageUrlViaContentScript(info, tab) {
+    if (info.srcUrl) return info.srcUrl;
+    if (!tab?.id) return null;
+    try {
+        const result = await chrome.tabs.sendMessage(tab.id, { action: "GET_IMAGE_AT_POINT", x: info.x, y: info.y });
+        return result?.src || null;
+    } catch (error) {
+        console.warn('[AnyPNG] Could not query the page content script for an image', error);
+        return null;
+    }
+}
+
 const API_CONFIG = {
     url: "https://anypng.botbhai.net",
     basicToken: "my_super_secret_hostinger_token_123!"
@@ -603,9 +674,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     // ==========================================
     // 💎 PRO TOOL: WATERMARK (Uses Supabase Token & In-Page Editor)
     // ==========================================
-    if (info.menuItemId === "watermark_png") {
+    if (info.menuItemId === "watermark_png" || info.menuItemId === "local_inpaint_page") {
         try {
-            const response = await fetch(info.srcUrl);
+            const imageUrl = await resolveContextImageUrlViaContentScript(info, tab);
+            if (!imageUrl) throw new Error('No image was found at the clicked location. Right-click directly on the image or open it in a new tab.');
+            const response = await fetch(imageUrl);
             const jobId = await storeInpaintBlob(await response.blob());
             await chrome.tabs.create({ url: chrome.runtime.getURL(`inpaint/index.html?job=${encodeURIComponent(jobId)}`) });
         } catch (e) {

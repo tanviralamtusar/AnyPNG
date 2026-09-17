@@ -8,7 +8,7 @@ export class WebGPUInpaintingProvider implements InpaintingProvider {
   private session: ort.InferenceSession | null = null;
   private modelPromise: Promise<ort.InferenceSession> | null = null;
   public lastTiming: TimingInfo = {};
-  constructor(private readonly modelPath = '/models/lama.onnx') {}
+  constructor(private readonly modelPath = './models/lama.onnx') {}
 
   async load(): Promise<ort.InferenceSession> {
     if (!navigator.gpu) throw new Error('WebGPU is unavailable. Use a recent Chrome or Edge browser with WebGPU enabled.');

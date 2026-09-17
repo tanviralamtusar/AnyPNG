@@ -26,6 +26,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const video = document.querySelector("video");
         sendResponse({ src: video ? video.currentSrc : null });
         return true;
+    } else if (message.action === "GET_IMAGE_AT_POINT") {
+        const x = Number.isFinite(message.x) ? message.x : window.innerWidth / 2;
+        const y = Number.isFinite(message.y) ? message.y : window.innerHeight / 2;
+        const distance = (image) => {
+            const box = image.getBoundingClientRect();
+            const dx = Math.max(box.left - x, 0, x - box.right);
+            const dy = Math.max(box.top - y, 0, y - box.bottom);
+            return dx * dx + dy * dy;
+        };
+        const images = [...document.images].filter(image => {
+            const box = image.getBoundingClientRect();
+            return box.width > 32 && box.height > 32 && getComputedStyle(image).visibility !== 'hidden';
+        }).sort((a, b) => distance(a) - distance(b));
+        if (images[0]?.currentSrc || images[0]?.src) {
+            sendResponse({ src: images[0].currentSrc || images[0].src });
+            return true;
+        }
+        const backgrounds = [...document.querySelectorAll('*')].map(node => {
+            const box = node.getBoundingClientRect();
+            const match = getComputedStyle(node).backgroundImage.match(/url\(["']?(.*?)["']?\)/);
+            return { url: match?.[1], area: box.width * box.height };
+        }).filter(item => item.url && item.area > 1024).sort((a, b) => b.area - a.area);
+        sendResponse({ src: backgrounds[0]?.url || null });
+        return true;
     } else if (message.action === "NUDGE_VIDEO_PLAYBACK") {
         const video = document.querySelector("video");
         if (!video) {
