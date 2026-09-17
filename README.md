@@ -38,4 +38,12 @@
    
 ---
 
+## Local WebGPU Inpainting Editor
+
+The repository includes a standalone Vite/TypeScript editor for local image inpainting. It does not send images to the API; existing extension tools and backend remain available.
+
+Run `npm install`, then `npm run dev` for development or `npm run build` to create the extension-ready page under `extension/inpaint`. Load `extension` as an unpacked Chrome extension. The existing “Remove Watermark” context-menu item opens the local editor and transfers the source image through extension-scoped IndexedDB.
+
+Place a compatible model at `public/models/lama.onnx`. The MVP expects RGB image input `[1, 3, H, W]`, binary mask input `[1, 1, H, W]`, and RGB output `[1, 3, H, W]`, with float values normalized to `0..1`. ONNX Runtime WebGPU loads the model once per editor session. Inference runs only on the padded mask crop, while the final image retains its original dimensions and untouched pixels. Add `?debug=true` for diagnostics.
+
 *Built with ❤️ for professional image workflows.*

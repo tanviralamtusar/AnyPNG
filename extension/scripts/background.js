@@ -66,6 +66,23 @@ chrome.runtime.onInstalled.addListener(() => {
 // chrome-extension:// URL instead.
 const ICON_URL = chrome.runtime.getURL('icons/icon48.png');
 
+// Temporary hand-off storage for the local inpainting editor. The blob stays in
+// the extension origin and is never sent to the backend.
+function storeInpaintBlob(blob) {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open('anypng-local-editor', 1);
+        request.onupgradeneeded = () => request.result.createObjectStore('jobs');
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+            const id = crypto.randomUUID();
+            const tx = request.result.transaction('jobs', 'readwrite');
+            tx.objectStore('jobs').put({ blob, createdAt: Date.now() }, id);
+            tx.oncomplete = () => resolve(id);
+            tx.onerror = () => reject(tx.error);
+        };
+    });
+}
+
 // 🔒 API CONFIGURATION
 const API_CONFIG = {
     url: "https://anypng.botbhai.net",
@@ -573,31 +590,10 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     // 💎 PRO TOOL: WATERMARK (Uses Supabase Token & In-Page Editor)
     // ==========================================
     if (info.menuItemId === "watermark_png") {
-        const supabaseSession = await getValidSession();
-        if (!supabaseSession) {
-            chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Login Required', message: 'Please click the AnyPNG icon in your toolbar to Login first!' });
-            return;
-        }
-
-        currentTabId = tab.id;
-
-        // Notify user that processing started
-        chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'AnyPNG Processing', message: 'Removing watermark... Please wait.' });
-        await chrome.storage.local.set({ watermarkProcessing: true });
-        chrome.runtime.sendMessage({ action: "PROCESSING_WATERMARK" }).catch(() => { });
-
-        // Try to open the popup automatically
-        if (chrome.action && chrome.action.openPopup) {
-            chrome.action.openPopup().catch(() => { });
-        }
-
         try {
             const response = await fetch(info.srcUrl);
-            cachedImageBlob = await response.blob();
-            const base64Original = await blobToDataUrl(cachedImageBlob);
-            await chrome.storage.local.set({ lastOriginalImage: base64Original });
-
-            await callWatermarkBackend(DEFAULT_PROMPT, supabaseSession, "gemini");
+            const jobId = await storeInpaintBlob(await response.blob());
+            await chrome.tabs.create({ url: chrome.runtime.getURL(`inpaint/index.html?job=${encodeURIComponent(jobId)}`) });
         } catch (e) {
             chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Error', message: "Failed to fetch image: " + e.message });
         }
