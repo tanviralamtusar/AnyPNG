@@ -19,7 +19,9 @@ export class WebGPUInpaintingProvider implements InpaintingProvider {
   async inpaint(image: ImageData, mask: ImageData, options: InpaintOptions): Promise<ImageData> {
     const total = performance.now(), bounds = maskBounds(mask); if (!bounds) throw new Error('Paint an area to remove before running inpainting.');
     const session = await this.load(), dilated = dilateMask(mask, options.maskDilation), rect = paddedCrop(bounds, options.cropPadding, image.width, image.height);
-    const inputSize = chooseSize(options.inferenceSize, rect.width, rect.height), imageCrop = resizeImage(cropFromImage(image, rect), inputSize, inputSize), maskCrop = resizeImage(cropFromImage(dilated, rect), inputSize, inputSize);
+    // sapienkit/LaMa-ONNX is a fixed 512x512 export. The crop is resized only
+    // for inference; the result is always restored to the original crop size.
+    const inputSize = 512, imageCrop = resizeImage(cropFromImage(image, rect), inputSize, inputSize), maskCrop = resizeImage(cropFromImage(dilated, rect), inputSize, inputSize);
     options.onStatus?.('Running local AI'); const prep = performance.now();
     const pixels = new Float32Array(inputSize * inputSize * 3), maskPixels = new Float32Array(inputSize * inputSize);
     for (let i = 0; i < inputSize * inputSize; i++) { pixels[i] = imageCrop.data[i * 4] / 255; pixels[inputSize * inputSize + i] = imageCrop.data[i * 4 + 1] / 255; pixels[inputSize * inputSize * 2 + i] = imageCrop.data[i * 4 + 2] / 255; maskPixels[i] = maskCrop.data[i * 4] > 127 ? 1 : 0; }
@@ -29,10 +31,11 @@ export class WebGPUInpaintingProvider implements InpaintingProvider {
     try { result = await session.run({ [session.inputNames[0]]: imageTensor, [session.inputNames[1]]: maskTensor }); } catch (error) { console.error('[AnyPNG] WebGPU inference failed', error); throw new Error('Local inference failed. The model may use an unsupported operator or require more GPU memory.'); }
     this.lastTiming.inference = performance.now() - infer; const output = result[session.outputNames[0]]; const values = output.data as Float32Array | number[];
     const patch = new ImageData(rect.width, rect.height), restored = resizeImage(maskCrop, rect.width, rect.height), compositeMask = featherMask(cropFromImage(restored, { x: 0, y: 0, width: restored.width, height: restored.height }), options.blendFeather);
-    for (let i = 0; i < rect.width * rect.height; i++) { const sx = Math.min(inputSize - 1, Math.floor(i % rect.width * inputSize / rect.width)), sy = Math.min(inputSize - 1, Math.floor(Math.floor(i / rect.width) * inputSize / rect.height)), s = sy * inputSize + sx; patch.data[i * 4] = clamp(values[s] * 255); patch.data[i * 4 + 1] = clamp(values[inputSize * inputSize + s] * 255); patch.data[i * 4 + 2] = clamp(values[inputSize * inputSize * 2 + s] * 255); patch.data[i * 4 + 3] = 255; }
+    let maxOutput = 0; for (const value of values) maxOutput = Math.max(maxOutput, Number(value)); const outputScale = maxOutput > 1.5 ? 1 : 255;
+    for (let i = 0; i < rect.width * rect.height; i++) { const sx = Math.min(inputSize - 1, Math.floor(i % rect.width * inputSize / rect.width)), sy = Math.min(inputSize - 1, Math.floor(Math.floor(i / rect.width) * inputSize / rect.height)), s = sy * inputSize + sx; patch.data[i * 4] = clamp(values[s] * outputScale); patch.data[i * 4 + 1] = clamp(values[inputSize * inputSize + s] * outputScale); patch.data[i * 4 + 2] = clamp(values[inputSize * inputSize * 2 + s] * outputScale); patch.data[i * 4 + 3] = 255; }
     options.onStatus?.('Blending result'); const comp = performance.now(), final = composite(image, patch, compositeMask, rect); this.lastTiming.composite = performance.now() - comp; this.lastTiming.total = performance.now() - total; return final;
   }
   dispose(): void { this.session?.release(); this.session = null; this.modelPromise = null; }
 }
 function clamp(value: number): number { return Math.max(0, Math.min(255, Math.round(value))); }
-function chooseSize(size: InferenceSize, width: number, height: number): 512 | 768 | 1024 { if (size !== 'auto') return size; const area = Math.max(width, height); return area > 1800 ? 1024 : area > 900 ? 768 : 512; }
+function chooseSize(_size: InferenceSize, _width: number, _height: number): 512 { return 512; }

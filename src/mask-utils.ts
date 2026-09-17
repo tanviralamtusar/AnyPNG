@@ -48,3 +48,19 @@ export function featherMask(mask: ImageData, radius: number): ImageData {
   }
   return out;
 }
+
+/** Conservative local heuristic for pale, low-saturation overlay text. It is
+ * intentionally opt-in: automatic detection is a suggestion the user can edit. */
+export function detectLikelyWatermark(image: ImageData): ImageData {
+  const out = new ImageData(image.width, image.height);
+  let hits = 0;
+  for (let y = 1; y < image.height - 1; y++) for (let x = 1; x < image.width - 1; x++) {
+    const i = (y * image.width + x) * 4, r = image.data[i], g = image.data[i + 1], b = image.data[i + 2];
+    const luminance = (r + g + b) / 3, saturation = Math.max(r, g, b) - Math.min(r, g, b);
+    const left = image.data[i - 4], right = image.data[i + 4], above = image.data[i - image.width * 4], below = image.data[i + image.width * 4];
+    const contrast = Math.max(Math.abs(luminance - (left + image.data[i - 3] + image.data[i - 2]) / 3), Math.abs(luminance - (right + image.data[i + 5] + image.data[i + 6]) / 3), Math.abs(luminance - (above + image.data[i - image.width * 4 + 1] + image.data[i - image.width * 4 + 2]) / 3), Math.abs(luminance - (below + image.data[i + image.width * 4 + 1] + image.data[i + image.width * 4 + 2]) / 3));
+    if (saturation < 55 && luminance > 90 && luminance < 235 && contrast > 14) { out.data[i] = out.data[i + 1] = out.data[i + 2] = 255; out.data[i + 3] = 255; hits++; }
+  }
+  if (hits < image.width * image.height * 0.0002) return new ImageData(image.width, image.height);
+  return out;
+}
