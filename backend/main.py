@@ -124,6 +124,7 @@ def _consume_inpaint_credit(user_id: str) -> int:
         if not isinstance(rows, list) or not rows:
             raise PermissionError("No billing profile exists for this account")
         current = int(rows[0].get("credits") or 0)
+        print(f"[inpaint] credit check user={user_id} observed_credits={current}")
         if current < INPAINT_CREDIT_COST:
             raise PermissionError("No inpainting credits remaining")
         update_query = urllib.parse.urlencode({"id": f"eq.{user_id}", "credits": f"eq.{current}"})

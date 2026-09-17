@@ -1,11 +1,11 @@
 import type { CropRect } from './types';
 
-export function imageDataFromCanvas(canvas: HTMLCanvasElement): ImageData { return canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height); }
+export function imageDataFromCanvas(canvas: HTMLCanvasElement): ImageData { return canvas.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, canvas.width, canvas.height); }
 
 export function imageDataFromBlob(blob: Blob): Promise<ImageData> {
   return createImageBitmap(blob).then(bitmap => {
     const canvas = document.createElement('canvas'); canvas.width = bitmap.width; canvas.height = bitmap.height;
-    const ctx = canvas.getContext('2d')!; ctx.drawImage(bitmap, 0, 0); bitmap.close(); return ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })!; ctx.drawImage(bitmap, 0, 0); bitmap.close(); return ctx.getImageData(0, 0, canvas.width, canvas.height);
   });
 }
 

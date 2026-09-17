@@ -12,6 +12,7 @@ export class WebGPUInpaintingProvider implements InpaintingProvider {
 
   async load(): Promise<ort.InferenceSession> {
     if (!navigator.gpu) throw new Error('WebGPU is unavailable. Use a recent Chrome or Edge browser with WebGPU enabled.');
+    ort.env.logLevel = 'error';
     if (!this.modelPromise) this.modelPromise = ort.InferenceSession.create(this.modelPath, { executionProviders: ['webgpu'] }).then((session: ort.InferenceSession) => { this.session = session; return session; });
     try { return await this.modelPromise; } catch (error) { this.modelPromise = null; throw new Error(`Could not load the local LaMa model at ${this.modelPath}.`); }
   }

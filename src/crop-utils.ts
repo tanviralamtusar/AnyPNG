@@ -19,6 +19,6 @@ export function resizeImage(source: ImageData, width: number, height: number): I
   const src = document.createElement('canvas'), dst = document.createElement('canvas');
   src.width = source.width; src.height = source.height; dst.width = width; dst.height = height;
   src.getContext('2d')!.putImageData(source, 0, 0);
-  const ctx = dst.getContext('2d')!; ctx.imageSmoothingEnabled = true; ctx.drawImage(src, 0, 0, width, height);
+  const ctx = dst.getContext('2d', { willReadFrequently: true })!; ctx.imageSmoothingEnabled = true; ctx.drawImage(src, 0, 0, width, height);
   return ctx.getImageData(0, 0, width, height);
 }
