@@ -38,13 +38,11 @@
    
 ---
 
-## Local WebGPU Inpainting Editor
+## One-click watermark removal
 
-The repository includes a standalone Vite/TypeScript editor for local image inpainting. It does not send images to the API; existing extension tools and backend remain available.
+Right-click an image and choose **AnyPNG → Remove Watermark & Download**. The extension sends the image to the existing server AI endpoint, verifies the signed-in Supabase account, charges one inpainting credit, downloads the repaired PNG, and shows an error notification if processing fails. No local AI/editor page is opened.
 
-Run `npm install`, then `npm run dev` for development or `npm run build` to create the extension-ready page under `extension/inpaint`. Load `extension` as an unpacked Chrome extension. The existing “Remove Watermark” context-menu item opens the local editor and transfers the source image through extension-scoped IndexedDB.
-
-Place a compatible model at `public/models/lama.onnx`. The MVP expects RGB image input `[1, 3, H, W]`, binary mask input `[1, 1, H, W]`, and RGB output `[1, 3, H, W]`, with float values normalized to `0..1`. ONNX Runtime WebGPU loads the model once per editor session. Inference runs only on the padded mask crop, while the final image retains its original dimensions and untouched pixels. Add `?debug=true` for diagnostics.
+The Vite/WebGPU editor files remain in the repository for development experiments, but they are no longer used by the extension context-menu workflow.
 
 ### Production credits
 

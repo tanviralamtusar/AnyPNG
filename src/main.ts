@@ -3,8 +3,10 @@ import { imageDataFromBlob, imageDataFromCanvas, canvasFromImageData } from './i
 import { WebGPUInpaintingProvider } from './webgpu-provider';
 import { TimingInfo } from './types';
 import { detectLikelyWatermark } from './mask-utils';
+import { detectRepeatedWatermarkText } from './ocr-detector';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
+const AUTO_MODE = new URLSearchParams(location.search).get('auto') === '1';
 app.innerHTML = `<header><div><span class="eyebrow">ANYPNG / LOCAL AI</span><h1>Inpaint images privately</h1><p>Mask an unwanted overlay and reconstruct it locally in your browser.</p></div><div id="gpu-badge" class="badge">Checking WebGPU…</div></header>
 <main><section class="workspace"><div id="dropzone" class="dropzone"><input id="file" type="file" accept="image/png,image/jpeg,image/webp" hidden><button id="upload" class="primary">Upload image</button><span>or drop a PNG, JPG, or WebP here</span></div><div id="canvas-wrap" class="canvas-wrap hidden"><div id="stage"><canvas id="image-canvas"></canvas><canvas id="mask-canvas"></canvas></div></div><div class="toolbar"><label>Brush <input id="brush" type="range" min="4" max="240" value="48"><output id="brush-value">48 px</output></label><label>Mask opacity <input id="opacity" type="range" min="10" max="100" value="55"></label><div class="buttons"><button data-mode="paint" class="tool active">Paint</button><button data-mode="erase" class="tool">Erase</button><button id="undo" class="tool">Undo</button><button id="redo" class="tool">Redo</button><button id="clear" class="tool">Clear</button></div><div class="buttons"><button id="fit" class="tool">Fit</button><button id="reset" class="tool">Reset view</button><button id="before" class="tool">Hold for original</button></div></div></section>
 <aside><section class="card"><h2>Inference</h2><div class="segmented"><label><input type="radio" name="size" value="512" checked>512</label><label><input type="radio" name="size" value="768">768</label><label><input type="radio" name="size" value="1024">1024</label><label><input type="radio" name="size" value="auto">Auto</label></div><button id="run" class="primary full" disabled>Remove selected area</button><div id="status" class="status">Upload an image to begin.</div></section><section class="card"><h2>Export</h2><select id="format"><option value="png">PNG</option><option value="jpeg">JPEG</option><option value="webp">WebP</option></select><label class="quality">Quality <input id="quality" type="range" min="10" max="100" value="92"><output id="quality-value">92%</output></label><button id="download" class="secondary full" disabled>Download result</button></section><section class="card diagnostics"><h2>Diagnostics</h2><dl><dt>WebGPU</dt><dd id="gpu-detail">—</dd><dt>Model</dt><dd id="model-time">—</dd><dt>Preprocess</dt><dd id="prep-time">—</dd><dt>Inference</dt><dd id="infer-time">—</dd><dt>Composite</dt><dd id="comp-time">—</dd><dt>Total</dt><dd id="total-time">—</dd></dl><div id="debug" class="debug hidden"></div></section></aside></main>`;
@@ -14,7 +16,7 @@ const imageCtx = imageCanvas.getContext('2d', { willReadFrequently: true })!, ma
 let source: ImageData | null = null, result: ImageData | null = null, drawing = false, mode = 'paint', opacity = .55, brush = 48, zoom = 1, history: ImageData[] = [], historyIndex = -1;
 const $ = <T extends HTMLElement>(id: string) => document.querySelector<T>(`#${id}`)!;
 const benchmarkButton = document.createElement('button'); benchmarkButton.id = 'benchmark'; benchmarkButton.className = 'secondary full'; benchmarkButton.disabled = true; benchmarkButton.textContent = 'Benchmark 512 / 768 / 1024'; $('run').after(benchmarkButton);
-const autoMaskButton = document.createElement('button'); autoMaskButton.id = 'auto-mask'; autoMaskButton.className = 'secondary full'; autoMaskButton.disabled = false; autoMaskButton.textContent = 'Auto-detect watermark (experimental)'; benchmarkButton.after(autoMaskButton);
+const autoMaskButton = document.createElement('button'); autoMaskButton.id = 'auto-mask'; autoMaskButton.className = 'secondary full'; autoMaskButton.disabled = false; autoMaskButton.textContent = 'Auto-detect watermark (AI)'; benchmarkButton.after(autoMaskButton);
 document.querySelectorAll<HTMLInputElement>('input[name=size]').forEach(input => { if (input.value !== '512') { input.disabled = true; input.parentElement!.title = 'This bundled LaMa model supports 512×512 only'; } }); benchmarkButton.textContent = 'Benchmark 512 (LaMa model)';
 
 function setStatus(text: string) { $('status').textContent = text; }
@@ -24,7 +26,25 @@ function pushHistory() { const current = maskCtx.getImageData(0, 0, maskCanvas.w
 function point(event: PointerEvent) { const r = maskCanvas.getBoundingClientRect(); return { x: Math.max(0, Math.min(maskCanvas.width - 1, (event.clientX - r.left) * maskCanvas.width / r.width)), y: Math.max(0, Math.min(maskCanvas.height - 1, (event.clientY - r.top) * maskCanvas.height / r.height)) }; }
 function stroke(event: PointerEvent) { const p = point(event); maskCtx.save(); maskCtx.globalCompositeOperation = mode === 'erase' ? 'destination-out' : 'source-over'; maskCtx.fillStyle = 'rgba(255,77,120,1)'; maskCtx.beginPath(); maskCtx.arc(p.x, p.y, brush / 2, 0, Math.PI * 2); maskCtx.fill(); maskCtx.restore(); renderMask(); }
 function loadBlob(blob: Blob) { imageDataFromBlob(blob).then(data => { source = data; result = null; [imageCanvas.width, maskCanvas.width] = [data.width, data.width]; [imageCanvas.height, maskCanvas.height] = [data.height, data.height]; history = [new ImageData(data.width, data.height)]; historyIndex = 0; wrap.classList.remove('hidden'); $('dropzone').classList.add('hidden'); $('run').removeAttribute('disabled'); benchmarkButton.disabled = false; $('download').setAttribute('disabled', ''); fit(); render(); setStatus(`${data.width} × ${data.height} ready. Paint the area to remove.`); }).catch(() => setStatus('Could not read that image. Try PNG, JPG, or WebP.')); }
-autoMaskButton.onclick = () => { if (!source) return; const detected = detectLikelyWatermark(source); if (!detected.data.some((value, index) => index % 4 === 3 && value > 0)) { setStatus('No likely watermark pixels detected. Paint the mask manually.'); return; } history = [detected]; historyIndex = 0; renderMask(); setStatus('Automatic mask created. Review it and erase any incorrect areas.'); };
+async function autoDetectMask(image: ImageData) {
+  setStatus('Detecting repeated watermark text locally…');
+  let detected: ImageData | null = null;
+  try {
+    detected = await detectRepeatedWatermarkText(image);
+  } catch (error) {
+    // OCR assets may be unavailable in a locked-down extension installation.
+    // The visual detector is still useful and must be tried independently.
+    console.warn('[AnyPNG] local OCR unavailable; using visual watermark detection', error);
+  }
+  if (!detected?.data.some((value, index) => index % 4 === 3 && value > 0)) detected = detectLikelyWatermark(image);
+  if (!detected.data.some((value, index) => index % 4 === 3 && value > 0)) {
+    setStatus('No watermark detected. Paint the mask manually.');
+    return false;
+  }
+  history = [detected]; historyIndex = 0; renderMask(); setStatus('AI mask created. Removing the watermark…');
+  return true;
+}
+autoMaskButton.onclick = () => { if (source) void autoDetectMask(source); };
 function fit() { if (!source) return; const maxW = wrap.clientWidth - 24, maxH = Math.max(360, window.innerHeight * .65); zoom = Math.min(1, maxW / source.width, maxH / source.height); stage.style.transform = `scale(${zoom})`; stage.style.transformOrigin = 'top left'; wrap.style.height = `${source.height * zoom + 24}px`; }
 
 $('upload').onclick = () => $('file').click(); $('file').onchange = () => { const file = ($('file') as HTMLInputElement).files?.[0]; if (file) loadBlob(file); }; ['dragover', 'drop'].forEach(type => $('dropzone').addEventListener(type, e => { e.preventDefault(); if (type === 'drop') { const file = (e as DragEvent).dataTransfer?.files[0]; if (file) loadBlob(file); } }));
@@ -58,3 +78,42 @@ const originalRunHandler = $('run').onclick;
 $('run').onclick = async () => { if (await requestInpaintPermit()) await originalRunHandler?.call($('run'), new PointerEvent('click')); };
 const originalBenchmarkHandler = benchmarkButton.onclick;
 benchmarkButton.onclick = async () => { if (await requestInpaintPermit()) await originalBenchmarkHandler?.call(benchmarkButton, new PointerEvent('click')); };
+
+let autoDetectionImage: ImageData | null = null;
+window.setInterval(() => { if (source && source !== autoDetectionImage) { autoDetectionImage = source; if (AUTO_MODE) void autoProcess(source); else void autoDetectMask(source); } }, 250);
+
+let autoProcessing = false;
+async function autoProcess(image: ImageData) {
+  if (autoProcessing) return; autoProcessing = true;
+  try {
+    if (!await autoDetectMask(image)) throw new Error('Automatic watermark detection found no safe mask.');
+    const hasMask = history[historyIndex]?.data.some((value, index) => index % 4 === 3 && value > 0);
+    if (!hasMask) throw new Error('Automatic watermark detection found no safe mask.');
+    if (!await requestInpaintPermit()) throw new Error('Credit authorization failed.');
+    await run();
+    if (!result) throw new Error('Inpainting did not return an image.');
+    const canvas = canvasFromImageData(result);
+    canvas.toBlob(blob => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob); const filename = `AnyPNG_Inpainted_${Date.now()}.png`;
+      const extension = (globalThis as typeof globalThis & { chrome?: { runtime?: { sendMessage: (message: unknown) => Promise<unknown> } } }).chrome;
+      if (extension?.runtime?.sendMessage) {
+        void extension.runtime.sendMessage({ action: 'DOWNLOAD_RESULT', url, filename }).then(() => {
+          setStatus('Downloaded.'); URL.revokeObjectURL(url); window.close();
+        }).catch(error => {
+          console.error('[AnyPNG] extension download failed', error);
+          setStatus('Download failed.');
+        });
+      } else {
+        const link = document.createElement('a'); link.href = url; link.download = filename; link.click();
+        setStatus('Downloaded.'); window.setTimeout(() => { URL.revokeObjectURL(url); window.close(); }, 900);
+      }
+    }, 'image/png');
+  } catch (error) {
+    console.error('[AnyPNG] automatic inpainting failed', error);
+    const detail = error instanceof Error ? error.message : 'Automatic inpainting failed.';
+    setStatus(`${detail} Open the editor to paint a mask.`);
+    const extension = (globalThis as typeof globalThis & { chrome?: { runtime?: { sendMessage: (message: unknown) => Promise<unknown> } } }).chrome;
+    if (extension?.runtime?.sendMessage) void extension.runtime.sendMessage({ action: 'AUTO_INPAINT_STATUS', ok: false, detail });
+  }
+}

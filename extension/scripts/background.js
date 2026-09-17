@@ -24,18 +24,18 @@ async function getConversionQuality() {
     return Number.isFinite(quality) && quality > 0 && quality <= 1 ? quality : DEFAULT_CONVERSION_QUALITY;
 }
 
-// Create the Right-Click Menus
-chrome.runtime.onInstalled.addListener(() => {
+// Create the Right-Click Menus. Run on service-worker startup as well so a
+// reload immediately removes menu entries from older extension versions.
+function createContextMenus() {
     // removeAll first: on an extension update the previously registered items are
     // still around, and re-creating an existing id fails with "duplicate id".
     chrome.contextMenus.removeAll(() => {
         chrome.contextMenus.create({ id: "pro_image_tools", title: "AnyPNG", contexts: ["page", "image"] });
-        chrome.contextMenus.create({ id: "local_inpaint_page", title: "Open Local Inpainting Editor", parentId: "pro_image_tools", contexts: ["page"] });
         Object.entries(IMAGE_FORMATS).forEach(([key, { label }]) => {
             chrome.contextMenus.create({ id: `download_${key}`, title: label, parentId: "pro_image_tools", contexts: ["image"] });
         });
         chrome.contextMenus.create({ id: "upscale_png", title: "✨ Upscale & Download", parentId: "pro_image_tools", contexts: ["image"] });
-        chrome.contextMenus.create({ id: "watermark_png", title: "💎 Remove Watermark (Pro)", parentId: "pro_image_tools", contexts: ["image"] });
+        chrome.contextMenus.create({ id: "watermark_png", title: "Remove Watermark & Download", parentId: "pro_image_tools", contexts: ["image"] });
         chrome.contextMenus.create({ id: "remove_bg_png", title: "✂️ Remove Background", parentId: "pro_image_tools", contexts: ["image"] });
 
         // Generic direct-src video download — works for plain <video src> sites.
@@ -59,7 +59,9 @@ chrome.runtime.onInstalled.addListener(() => {
             });
         });
     });
-});
+}
+chrome.runtime.onInstalled.addListener(createContextMenus);
+createContextMenus();
 
 // Bare relative iconUrl strings ("icons/icon48.png") resolve unreliably for
 // chrome.notifications.create() from an MV3 service worker (intermittent
@@ -158,14 +160,14 @@ async function resolveContextImageUrl(info, tab) {
 
 // 🔒 API CONFIGURATION
 async function resolveContextImageUrlViaContentScript(info, tab) {
-    if (info.srcUrl) return info.srcUrl;
-    if (!tab?.id) return null;
+    const direct = info.srcUrl ? [info.srcUrl] : [];
+    if (!tab?.id) return direct;
     try {
         const result = await chrome.tabs.sendMessage(tab.id, { action: "GET_IMAGE_AT_POINT", x: info.x, y: info.y });
-        return result?.src || null;
+        return [...new Set([...(result?.srcs || []), ...direct])];
     } catch (error) {
         console.warn('[AnyPNG] Could not query the page content script for an image', error);
-        return null;
+        return direct;
     }
 }
 
@@ -674,15 +676,40 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     // ==========================================
     // 💎 PRO TOOL: WATERMARK (Uses Supabase Token & In-Page Editor)
     // ==========================================
-    if (info.menuItemId === "watermark_png" || info.menuItemId === "local_inpaint_page") {
+    if (info.menuItemId === "watermark_png") {
         try {
-            const imageUrl = await resolveContextImageUrlViaContentScript(info, tab);
-            if (!imageUrl) throw new Error('No image was found at the clicked location. Right-click directly on the image or open it in a new tab.');
-            const response = await fetch(imageUrl);
-            const jobId = await storeInpaintBlob(await response.blob());
-            await chrome.tabs.create({ url: chrome.runtime.getURL(`inpaint/index.html?job=${encodeURIComponent(jobId)}`) });
+            const imageUrls = await resolveContextImageUrlViaContentScript(info, tab);
+            if (!imageUrls.length) throw new Error('No image was found at the clicked location. Right-click directly on the image.');
+            let lastError = null;
+            cachedImageBlob = null;
+            for (const imageUrl of imageUrls) {
+                try {
+                    const response = await fetch(imageUrl, {
+                        cache: 'no-store',
+                        referrer: tab?.url || undefined,
+                        referrerPolicy: 'strict-origin-when-cross-origin',
+                    });
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    const contentType = response.headers.get('content-type') || '';
+                    const blob = await response.blob();
+                    if (!contentType.startsWith('image/') && !blob.type.startsWith('image/')) throw new Error('URL did not return an image');
+                    cachedImageBlob = blob;
+                    break;
+                } catch (error) {
+                    lastError = error;
+                }
+            }
+            if (!cachedImageBlob) throw new Error(`Could not fetch the Magnific image${lastError ? ` (${lastError.message})` : ''}. Open the image in a new tab and retry.`);
+            const session = await getValidSession();
+            if (!getAccessToken(session)) throw new Error('Please sign in to use watermark removal credits.');
+            await chrome.storage.local.set({ lastOriginalImage: await blobToDataUrl(cachedImageBlob), watermarkProcessing: true });
+            await callWatermarkBackend(
+                'Remove every visible watermark, logo, and text overlay. Reconstruct those areas naturally and keep the rest of the image unchanged.',
+                session,
+                'standard'
+            );
         } catch (e) {
-            chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Error', message: "Failed to fetch image: " + e.message });
+            chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'AnyPNG watermark removal failed', message: e.message || 'Could not process the selected image.' });
         }
     }
 
@@ -943,7 +970,13 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
             await callWatermarkBackend(prompt, supabaseSession, method);
         }
     } else if (message.action === "DOWNLOAD_RESULT") {
-        chrome.downloads.download({ url: message.url, filename: `AnyPNG_Pro_Cleaned_${Date.now()}.png` });
+        chrome.downloads.download({ url: message.url, filename: message.filename || `AnyPNG_Pro_Cleaned_${Date.now()}.png` }, (downloadId) => {
+            if (chrome.runtime.lastError) sendResponse({ ok: false, detail: chrome.runtime.lastError.message });
+            else sendResponse({ ok: downloadId !== undefined });
+        });
+        return true;
+    } else if (message.action === "AUTO_INPAINT_STATUS" && message.ok === false) {
+        chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'AnyPNG watermark removal failed', message: message.detail || 'Automatic removal could not be completed.' });
     } else if (message.action === "DOWNLOAD_VIDEO") {
         const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (activeTab) await resolveVideoDownload(activeTab, message.quality, message.url);

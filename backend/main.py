@@ -76,6 +76,27 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     return credentials.credentials
 
 
+async def verify_watermark_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Accept the legacy service token or a Supabase user token.
+
+    The extension uses the Supabase token so this endpoint can charge the
+    authenticated user's credits server-side. The legacy token remains valid
+    for existing backend clients that do not use account billing.
+    """
+    token = credentials.credentials
+    if token == SECRET_TOKEN:
+        return None
+    try:
+        user_id = _verify_supabase_user(token)
+        _consume_inpaint_credit(user_id)
+        return user_id
+    except PermissionError as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
+    except Exception as exc:
+        print(f"[watermark] authorization failure: {exc}")
+        raise HTTPException(status_code=503, detail="Could not verify watermark-removal credits") from exc
+
+
 def _supabase_json_request(url: str, method: str, headers: dict[str, str], body: object | None = None) -> object:
     payload = None if body is None else json.dumps(body).encode("utf-8")
     request = urllib.request.Request(url, data=payload, headers=headers, method=method)
@@ -598,7 +619,7 @@ async def upscale_image(
     )
 
 
-@app.post("/remove-watermark", dependencies=[Depends(verify_token)])
+@app.post("/remove-watermark", dependencies=[Depends(verify_watermark_token)])
 async def remove_watermark(
     image: UploadFile = File(...),
     prompt: str = Form(""),

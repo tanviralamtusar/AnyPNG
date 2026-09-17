@@ -39,8 +39,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             const box = image.getBoundingClientRect();
             return box.width > 32 && box.height > 32 && getComputedStyle(image).visibility !== 'hidden';
         }).sort((a, b) => distance(a) - distance(b));
-        if (images[0]?.currentSrc || images[0]?.src) {
-            sendResponse({ src: images[0].currentSrc || images[0].src });
+        const imageCandidates = (image) => {
+            const values = [
+                image.currentSrc,
+                image.src,
+                image.getAttribute('data-src'),
+                image.getAttribute('data-original'),
+                image.getAttribute('data-lazy-src'),
+                ...(image.getAttribute('srcset') || '').split(',').map(value => value.trim().split(/\s+/)[0]),
+            ];
+            return values.filter(value => value && !value.startsWith('data:')).map(value => {
+                try { return new URL(value, location.href).href; } catch (_) { return null; }
+            }).filter(Boolean);
+        };
+        const imageUrls = images.flatMap(imageCandidates);
+        if (imageUrls.length > 0) {
+            sendResponse({ srcs: [...new Set(imageUrls)] });
             return true;
         }
         const backgrounds = [...document.querySelectorAll('*')].map(node => {
@@ -48,7 +62,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             const match = getComputedStyle(node).backgroundImage.match(/url\(["']?(.*?)["']?\)/);
             return { url: match?.[1], area: box.width * box.height };
         }).filter(item => item.url && item.area > 1024).sort((a, b) => b.area - a.area);
-        sendResponse({ src: backgrounds[0]?.url || null });
+        sendResponse({ srcs: backgrounds[0]?.url ? [new URL(backgrounds[0].url, location.href).href] : [] });
         return true;
     } else if (message.action === "NUDGE_VIDEO_PLAYBACK") {
         const video = document.querySelector("video");
