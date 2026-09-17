@@ -3,6 +3,15 @@ import re
 import asyncio
 import tempfile
 import shutil
+import base64
+import hashlib
+import hmac
+import json
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
 from io import BytesIO
 from urllib.parse import urlparse
 from google import genai
@@ -32,6 +41,11 @@ SECRET_TOKEN = os.getenv("SECRET_TOKEN", "my_super_secret_hostinger_token_123!")
 VERTEX_API_KEY = os.getenv("VERTEX_API_KEY")
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
 GOOGLE_CLOUD_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+INPAINT_PERMIT_SECRET = os.getenv("INPAINT_PERMIT_SECRET", "")
+INPAINT_CREDIT_COST = 1
 
 # AI image models the client is allowed to request.
 # Keep this list in sync with the dropdown in extension/pages/settings.html.
@@ -60,6 +74,75 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if credentials.credentials != SECRET_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid Security Token")
     return credentials.credentials
+
+
+def _supabase_json_request(url: str, method: str, headers: dict[str, str], body: object | None = None) -> object:
+    payload = None if body is None else json.dumps(body).encode("utf-8")
+    request = urllib.request.Request(url, data=payload, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            raw = response.read()
+            return json.loads(raw.decode("utf-8")) if raw else None
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Supabase request failed ({exc.code}): {detail[:300]}") from exc
+
+
+def _verify_supabase_user(access_token: str) -> str:
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+        raise RuntimeError("Supabase auth is not configured on the API")
+    data = _supabase_json_request(
+        f"{SUPABASE_URL}/auth/v1/user",
+        "GET",
+        {"apikey": SUPABASE_ANON_KEY, "Authorization": f"Bearer {access_token}"},
+    )
+    user_id = data.get("id") if isinstance(data, dict) else None
+    if not user_id:
+        raise ValueError("Invalid Supabase session")
+    return user_id
+
+
+def _consume_inpaint_credit(user_id: str) -> int:
+    """Consume one credit without allowing concurrent requests to overspend.
+
+    The conditional PATCH is an optimistic compare-and-swap: if another request
+    changed the row after our read, zero rows are updated and we retry with the
+    newer balance.
+    """
+    if not SUPABASE_SERVICE_ROLE_KEY:
+        raise RuntimeError("SUPABASE_SERVICE_ROLE_KEY is not configured on the API")
+    headers = {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
+    profile_url = f"{SUPABASE_URL}/rest/v1/profiles"
+    for _ in range(4):
+        query = urllib.parse.urlencode({"id": f"eq.{user_id}", "select": "credits"})
+        rows = _supabase_json_request(f"{profile_url}?{query}", "GET", headers)
+        if not isinstance(rows, list) or not rows:
+            raise PermissionError("No billing profile exists for this account")
+        current = int(rows[0].get("credits") or 0)
+        if current < INPAINT_CREDIT_COST:
+            raise PermissionError("No inpainting credits remaining")
+        update_query = urllib.parse.urlencode({"id": f"eq.{user_id}", "credits": f"eq.{current}"})
+        updated = _supabase_json_request(
+            f"{profile_url}?{update_query}", "PATCH", headers,
+            {"credits": current - INPAINT_CREDIT_COST},
+        )
+        if isinstance(updated, list) and updated:
+            return int(updated[0].get("credits") or 0)
+    raise RuntimeError("Credit balance changed repeatedly; please retry")
+
+
+def _make_inpaint_permit(user_id: str) -> str:
+    if not INPAINT_PERMIT_SECRET:
+        raise RuntimeError("INPAINT_PERMIT_SECRET is not configured on the API")
+    payload = {"sub": user_id, "scope": "local-inpaint", "exp": int(time.time()) + 300, "jti": str(uuid.uuid4())}
+    encoded = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
+    signature = hmac.new(INPAINT_PERMIT_SECRET.encode(), encoded.encode(), hashlib.sha256).digest()
+    return f"{encoded}.{base64.urlsafe_b64encode(signature).decode().rstrip('=')}"
 
 
 # 🤖 SHARED AI HELPER
@@ -148,7 +231,7 @@ def run_gemini_image_edit(contents: bytes, mime_type: str, prompt: str, model: s
 
 # Bumped when the client-visible contract changes, so /ping can confirm what is
 # actually deployed instead of inferring it from download behaviour.
-API_FEATURES = ["cookie_auth"]
+API_FEATURES = ["cookie_auth", "local_inpaint_credits"]
 
 _background_session = None
 
@@ -182,6 +265,24 @@ def _remove_background_with_matting(contents: bytes) -> bytes:
 @app.get("/ping")
 async def ping():
     return {"status": "success", "message": "API is Live!", "features": API_FEATURES}
+
+
+@app.post("/inpaint/authorize")
+async def authorize_local_inpaint(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Authorize one local inpainting run without receiving the image or mask."""
+    try:
+        user_id = await asyncio.to_thread(_verify_supabase_user, credentials.credentials)
+        remaining = await asyncio.to_thread(_consume_inpaint_credit, user_id)
+        permit = _make_inpaint_permit(user_id)
+        return {"authorized": True, "permit": permit, "remaining_credits": remaining, "expires_in": 300}
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        print(f"[inpaint] authorization configuration/request failure: {exc}")
+        raise HTTPException(status_code=503, detail="Credit authorization is temporarily unavailable.") from exc
+
 
 
 # 🎬 VIDEO DOWNLOAD (yt-dlp fallback for the extension's client-side capture cascade)

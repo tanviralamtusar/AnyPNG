@@ -40,3 +40,17 @@ async function loadExtensionJob(): Promise<void> {
   loadBlob(blob);
 }
 loadExtensionJob().catch(error => { console.error('[AnyPNG] extension image hand-off', error); setStatus(error instanceof Error ? error.message : 'Could not load the selected image.'); });
+
+async function requestInpaintPermit(): Promise<boolean> {
+  const extension = (globalThis as typeof globalThis & { chrome?: { runtime?: { sendMessage: (message: unknown) => Promise<{ authorized?: boolean; permit?: string; detail?: string }> } } }).chrome;
+  if (!extension?.runtime?.sendMessage) { setStatus('Open this editor from the AnyPNG extension to use account credits.'); return false; }
+  try {
+    const response = await extension.runtime.sendMessage({ action: 'AUTHORIZE_INPAINT' });
+    if (!response?.authorized || !response.permit) throw new Error(response?.detail || 'No inpainting credits remaining.');
+    return true;
+  } catch (error) { setStatus(error instanceof Error ? error.message : 'Credit authorization failed.'); return false; }
+}
+const originalRunHandler = $('run').onclick;
+$('run').onclick = async () => { if (await requestInpaintPermit()) await originalRunHandler?.call($('run'), new PointerEvent('click')); };
+const originalBenchmarkHandler = benchmarkButton.onclick;
+benchmarkButton.onclick = async () => { if (await requestInpaintPermit()) await originalBenchmarkHandler?.call(benchmarkButton, new PointerEvent('click')); };

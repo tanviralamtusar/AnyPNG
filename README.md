@@ -46,4 +46,10 @@ Run `npm install`, then `npm run dev` for development or `npm run build` to crea
 
 Place a compatible model at `public/models/lama.onnx`. The MVP expects RGB image input `[1, 3, H, W]`, binary mask input `[1, 1, H, W]`, and RGB output `[1, 3, H, W]`, with float values normalized to `0..1`. ONNX Runtime WebGPU loads the model once per editor session. Inference runs only on the padded mask crop, while the final image retains its original dimensions and untouched pixels. Add `?debug=true` for diagnostics.
 
+### Production credits
+
+Local inference is gated by `POST /inpaint/authorize`. The extension sends only the signed-in Supabase access token; it never uploads the image or mask. The API validates the token with Supabase Auth, atomically consumes one credit from the existing `profiles.credits` balance, and returns a short-lived permit.
+
+Configure the API with `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and a private random `INPAINT_PERMIT_SECRET`. Never ship the service-role key or permit secret in the extension. If authorization is unavailable or the user has no credits, local inference does not start.
+
 *Built with ❤️ for professional image workflows.*

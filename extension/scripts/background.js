@@ -83,6 +83,20 @@ function storeInpaintBlob(blob) {
     });
 }
 
+async function authorizeLocalInpaint() {
+    const session = await getValidSession();
+    const accessToken = getAccessToken(session);
+    if (!accessToken) throw new Error('Please sign in to use inpainting credits.');
+    const response = await fetch(`${API_CONFIG.url}/inpaint/authorize`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${accessToken}` },
+    });
+    let data = null;
+    try { data = await response.json(); } catch (_) { /* handled below */ }
+    if (!response.ok || !data?.authorized) throw new Error(data?.detail || 'No inpainting credits remaining.');
+    return data;
+}
+
 // 🔒 API CONFIGURATION
 const API_CONFIG = {
     url: "https://anypng.botbhai.net",
@@ -836,6 +850,15 @@ async function callWatermarkBackend(prompt, session, method = "standard") {
         });
     }
 }
+
+// Local editor billing gate. It authorizes a run but never receives the image.
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action !== "AUTHORIZE_INPAINT") return;
+    authorizeLocalInpaint()
+        .then(result => sendResponse(result))
+        .catch(error => sendResponse({ authorized: false, detail: error.message || 'Authorization failed.' }));
+    return true;
+});
 
 // UI Message listeners for the Pro Editor
 chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
