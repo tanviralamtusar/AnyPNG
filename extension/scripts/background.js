@@ -35,7 +35,6 @@ function createContextMenus() {
             chrome.contextMenus.create({ id: `download_${key}`, title: label, parentId: "pro_image_tools", contexts: ["image"] });
         });
         chrome.contextMenus.create({ id: "upscale_png", title: "✨ Upscale & Download", parentId: "pro_image_tools", contexts: ["image"] });
-        chrome.contextMenus.create({ id: "watermark_png", title: "Remove Watermark & Download", parentId: "pro_image_tools", contexts: ["image"] });
         chrome.contextMenus.create({ id: "remove_bg_png", title: "✂️ Remove Background", parentId: "pro_image_tools", contexts: ["image"] });
 
         // Generic direct-src video download — works for plain <video src> sites.
@@ -674,49 +673,9 @@ async function resolveVideoDownload(tab, quality, pageUrlOverride) {
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
     // ==========================================
-    // 💎 PRO TOOL: WATERMARK (Uses Supabase Token & In-Page Editor)
-    // ==========================================
-    if (info.menuItemId === "watermark_png") {
-        try {
-            const imageUrls = await resolveContextImageUrlViaContentScript(info, tab);
-            if (!imageUrls.length) throw new Error('No image was found at the clicked location. Right-click directly on the image.');
-            let lastError = null;
-            cachedImageBlob = null;
-            for (const imageUrl of imageUrls) {
-                try {
-                    const response = await fetch(imageUrl, {
-                        cache: 'no-store',
-                        referrer: tab?.url || undefined,
-                        referrerPolicy: 'strict-origin-when-cross-origin',
-                    });
-                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                    const contentType = response.headers.get('content-type') || '';
-                    const blob = await response.blob();
-                    if (!contentType.startsWith('image/') && !blob.type.startsWith('image/')) throw new Error('URL did not return an image');
-                    cachedImageBlob = blob;
-                    break;
-                } catch (error) {
-                    lastError = error;
-                }
-            }
-            if (!cachedImageBlob) throw new Error(`Could not fetch the Magnific image${lastError ? ` (${lastError.message})` : ''}. Open the image in a new tab and retry.`);
-            const session = await getValidSession();
-            if (!getAccessToken(session)) throw new Error('Please sign in to use watermark removal credits.');
-            await chrome.storage.local.set({ lastOriginalImage: await blobToDataUrl(cachedImageBlob), watermarkProcessing: true });
-            await callWatermarkBackend(
-                'Remove every visible watermark, logo, and text overlay. Reconstruct those areas naturally and keep the rest of the image unchanged.',
-                session,
-                'standard'
-            );
-        } catch (e) {
-            chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'AnyPNG watermark removal failed', message: e.message || 'Could not process the selected image.' });
-        }
-    }
-
-    // ==========================================
     // 🆓 FREE TOOLS: UPSCALE & BG REMOVE (Uses Basic Token & Standard Loading)
     // ==========================================
-    else if (info.menuItemId === "upscale_png" || info.menuItemId === "remove_bg_png") {
+    if (info.menuItemId === "upscale_png" || info.menuItemId === "remove_bg_png") {
         chrome.storage.sync.get(['upscaleFactor'], async (settings) => {
             const scale = settings.upscaleFactor || '2';
 
@@ -868,7 +827,7 @@ function getAccessToken(session) {
 }
 
 // Helper Function specifically for the Watermark API
-async function callWatermarkBackend(prompt, session, method = "standard") {
+async function callWatermarkBackend(prompt, session, method = "standard", downloadResult = false) {
     // The deployed /remove-watermark endpoint authenticates the user via their
     // Supabase session JWT (to identify the account and deduct credits) — not the
     // static basic token. Use the access token from the already-validated session.
@@ -923,6 +882,21 @@ async function callWatermarkBackend(prompt, session, method = "standard") {
         // Save to storage for the popup to read
         await chrome.storage.local.set({ lastWatermarkResult: base64Data, watermarkProcessing: false });
 
+        if (downloadResult) {
+            chrome.downloads.download({
+                url: base64Data,
+                filename: `AnyPNG_Watermark_Removed_${Date.now()}.png`,
+                saveAs: false,
+            }, (downloadId) => {
+                if (chrome.runtime.lastError) {
+                    chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Download failed', message: chrome.runtime.lastError.message });
+                } else {
+                    chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Watermark removed', message: 'The cleaned image was downloaded.' });
+                }
+            });
+            return;
+        }
+
         // Notify popup if it's open
         chrome.runtime.sendMessage({ action: "UPDATE_PREVIEW", image: base64Data }).catch(() => {
             // If popup is closed, just show a notification
@@ -936,8 +910,10 @@ async function callWatermarkBackend(prompt, session, method = "standard") {
         if (lowerMsg.includes("does not support image") ||
             lowerMsg.includes("cannot read image") ||
             lowerMsg.includes("image input") ||
-            (lowerMsg.includes("model") && lowerMsg.includes("image"))) {
+            lowerMsg.includes("unsupported image format")) {
             userMessage = "This image format is not supported. Please try a different image (PNG, JPG, or WebP recommended).";
+        } else if (lowerMsg.includes("model") || lowerMsg.includes("not_found") || lowerMsg.includes("404")) {
+            userMessage = "The server AI model is unavailable. Please redeploy the backend with the current Gemini image model.";
         } else if (lowerMsg.includes("failed to fetch") || lowerMsg.includes("network")) {
             userMessage = "Network error. Please check your connection and try again.";
         }
@@ -951,33 +927,9 @@ async function callWatermarkBackend(prompt, session, method = "standard") {
     }
 }
 
-// Local editor billing gate. It authorizes a run but never receives the image.
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.action !== "AUTHORIZE_INPAINT") return;
-    authorizeLocalInpaint()
-        .then(result => sendResponse(result))
-        .catch(error => sendResponse({ authorized: false, detail: error.message || 'Authorization failed.' }));
-    return true;
-});
-
-// UI Message listeners for the Pro Editor
+// Runtime message listeners
 chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
-    if (message.action === "RETRY_WATERMARK") {
-        const supabaseSession = await getValidSession();
-        if (supabaseSession) {
-            const prompt = message.prompt || DEFAULT_PROMPT;
-            const method = message.method || "standard";
-            await callWatermarkBackend(prompt, supabaseSession, method);
-        }
-    } else if (message.action === "DOWNLOAD_RESULT") {
-        chrome.downloads.download({ url: message.url, filename: message.filename || `AnyPNG_Pro_Cleaned_${Date.now()}.png` }, (downloadId) => {
-            if (chrome.runtime.lastError) sendResponse({ ok: false, detail: chrome.runtime.lastError.message });
-            else sendResponse({ ok: downloadId !== undefined });
-        });
-        return true;
-    } else if (message.action === "AUTO_INPAINT_STATUS" && message.ok === false) {
-        chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'AnyPNG watermark removal failed', message: message.detail || 'Automatic removal could not be completed.' });
-    } else if (message.action === "DOWNLOAD_VIDEO") {
+    if (message.action === "DOWNLOAD_VIDEO") {
         const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (activeTab) await resolveVideoDownload(activeTab, message.quality, message.url);
     }

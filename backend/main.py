@@ -49,10 +49,10 @@ INPAINT_CREDIT_COST = 1
 
 # AI image models the client is allowed to request.
 # Keep this list in sync with the dropdown in extension/pages/settings.html.
-DEFAULT_AI_MODEL = "gemini-2.0-flash-preview-image-generation"
+DEFAULT_AI_MODEL = "gemini-2.5-flash-image"
 ALLOWED_AI_MODELS = {
-    "gemini-2.0-flash-preview-image-generation",
-    "gemini-2.5-flash-image-preview",
+    "gemini-2.5-flash-image",
+    "gemini-3.1-flash-image",
 }
 
 # Initialize Vertex AI GenAI Client
@@ -156,6 +156,34 @@ def _consume_inpaint_credit(user_id: str) -> int:
         if isinstance(updated, list) and updated:
             return int(updated[0].get("credits") or 0)
     raise RuntimeError("Credit balance changed repeatedly; please retry")
+
+
+def _refund_inpaint_credit(user_id: str) -> None:
+    """Return a credit when a billed AI request fails before producing output."""
+    if not SUPABASE_SERVICE_ROLE_KEY:
+        return
+    headers = {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
+    profile_url = f"{SUPABASE_URL}/rest/v1/profiles"
+    for _ in range(4):
+        query = urllib.parse.urlencode({"id": f"eq.{user_id}", "select": "credits"})
+        rows = _supabase_json_request(f"{profile_url}?{query}", "GET", headers)
+        if not isinstance(rows, list) or not rows:
+            return
+        current = int(rows[0].get("credits") or 0)
+        update_query = urllib.parse.urlencode({"id": f"eq.{user_id}", "credits": f"eq.{current}"})
+        updated = _supabase_json_request(
+            f"{profile_url}?{update_query}", "PATCH", headers,
+            {"credits": current + INPAINT_CREDIT_COST},
+        )
+        if isinstance(updated, list) and updated:
+            print(f"[inpaint] refunded failed request user={user_id} credits={current + INPAINT_CREDIT_COST}")
+            return
+    print(f"[inpaint] could not refund failed request user={user_id}")
 
 
 def _make_inpaint_permit(user_id: str) -> str:
@@ -616,24 +644,6 @@ async def upscale_image(
     )
     return run_gemini_image_edit(
         contents, _normalize_mime(image.content_type), prompt, _resolve_model(model)
-    )
-
-
-@app.post("/remove-watermark", dependencies=[Depends(verify_watermark_token)])
-async def remove_watermark(
-    image: UploadFile = File(...),
-    prompt: str = Form(""),
-    method: str = Form("gemini"),  # kept for backward compatibility; always AI now
-    model: str = Form(DEFAULT_AI_MODEL),
-):
-    contents = await image.read()
-    instruction = prompt.strip() or (
-        "Remove all watermarks, logos, and text overlays from this image. "
-        "Fill in the removed areas naturally to match the surrounding background. "
-        "Keep everything else in the image exactly the same."
-    )
-    return run_gemini_image_edit(
-        contents, _normalize_mime(image.content_type), instruction, _resolve_model(model)
     )
 
 

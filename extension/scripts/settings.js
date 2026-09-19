@@ -29,15 +29,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // Load sync settings
-    chrome.storage.sync.get(['upscaleFactor', 'enableAdvancedPrompt', 'aiModel', 'conversionQuality', 'defaultVideoQuality', 'showYoutubeButton'], (result) => {
+    chrome.storage.sync.get(['upscaleFactor', 'conversionQuality', 'defaultVideoQuality', 'showYoutubeButton'], (result) => {
         if (result.upscaleFactor) {
             document.getElementById('upscaleFactor').value = result.upscaleFactor;
-        }
-        if (result.enableAdvancedPrompt !== undefined) {
-            document.getElementById('enableAdvancedPrompt').checked = result.enableAdvancedPrompt;
-        }
-        if (result.aiModel) {
-            document.getElementById('aiModel').value = result.aiModel;
         }
         if (result.conversionQuality) {
             document.getElementById('conversionQuality').value = result.conversionQuality;
@@ -378,13 +372,11 @@ document.getElementById('testBtn').addEventListener('click', async () => {
 // Save settings when the button is clicked
 document.getElementById('saveBtn').addEventListener('click', () => {
     const upscaleFactor = document.getElementById('upscaleFactor').value;
-    const enableAdvancedPrompt = document.getElementById('enableAdvancedPrompt').checked;
-    const aiModel = document.getElementById('aiModel').value;
     const conversionQuality = document.getElementById('conversionQuality').value;
     const defaultVideoQuality = document.getElementById('defaultVideoQuality').value;
     const showYoutubeButton = document.getElementById('showYoutubeButton').checked;
 
-    chrome.storage.sync.set({ upscaleFactor, enableAdvancedPrompt, aiModel, conversionQuality, defaultVideoQuality, showYoutubeButton }, () => {
+    chrome.storage.sync.set({ upscaleFactor, conversionQuality, defaultVideoQuality, showYoutubeButton }, () => {
         const status = document.getElementById('status');
         status.classList.add('show');
 
