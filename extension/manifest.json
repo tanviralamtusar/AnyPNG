@@ -11,9 +11,7 @@
     "storage",
     "notifications",
     "offscreen",
-    "webRequest"
-  ],
-  "optional_permissions": [
+    "webRequest",
     "cookies"
   ],
   "host_permissions": [

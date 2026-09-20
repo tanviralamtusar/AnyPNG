@@ -43,15 +43,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         document.getElementById('showYoutubeButton').checked = result.showYoutubeButton !== false;
     });
 
-    // Reconcile the cookie-auth toggle against the permission actually held: the
-    // user can revoke "cookies" from chrome://extensions at any time, and the stored
-    // flag alone would then lie about what the extension can do.
+    // Cookie-assisted retries are enabled unless the user explicitly opts out.
+    // The permission check keeps the UI accurate after an extension update.
     (async () => {
         const { enableCookieAuth } = await chrome.storage.local.get('enableCookieAuth');
         const granted = await chrome.permissions.contains({ permissions: ['cookies'] });
-        const on = !!enableCookieAuth && granted;
+        // Cookie-assisted retries are on unless the user explicitly opts out.
+        const on = enableCookieAuth !== false && granted;
         document.getElementById('enableCookieAuth').checked = on;
-        if (enableCookieAuth && !granted) await chrome.storage.local.set({ enableCookieAuth: false });
     })();
 
     // Load local settings (theme)
@@ -291,15 +290,9 @@ document.getElementById('enableCookieAuth')?.addEventListener('change', async (e
     const checkbox = e.target;
 
     if (checkbox.checked) {
-        let granted = false;
-        try {
-            granted = await chrome.permissions.request({ permissions: ['cookies'] });
-        } catch (err) {
-            console.error('Cookie permission request failed:', err);
-        }
+        const granted = await chrome.permissions.contains({ permissions: ['cookies'] });
         if (!granted) {
             checkbox.checked = false;
-            await chrome.storage.local.set({ enableCookieAuth: false });
             status.innerText = 'Permission declined — leaving this off.';
             status.style.color = 'var(--text-muted)';
             return;
@@ -311,12 +304,6 @@ document.getElementById('enableCookieAuth')?.addEventListener('change', async (e
     }
 
     await chrome.storage.local.set({ enableCookieAuth: false });
-    // Hand the permission back so the extension can't read cookies while off.
-    try {
-        await chrome.permissions.remove({ permissions: ['cookies'] });
-    } catch (err) {
-        console.error('Cookie permission removal failed:', err);
-    }
     status.innerText = 'Off. Cookies will never be sent.';
     status.style.color = 'var(--text-muted)';
 });

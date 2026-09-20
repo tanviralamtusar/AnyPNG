@@ -560,18 +560,20 @@ async function downloadViaBackend(tab, quality, platform) {
     if (!result.ok && result.code === 'auth_required') {
         const { enableCookieAuth } = await chrome.storage.local.get('enableCookieAuth');
         const hasPermission = await hasCookiePermission();
-        const cookiesText = enableCookieAuth && hasPermission
+        // Enabled by default. An explicit false is the user's opt-out.
+        const cookieAuthEnabled = enableCookieAuth !== false;
+        const cookiesText = cookieAuthEnabled && hasPermission
             ? await buildNetscapeCookieFile(platform)
             : null;
 
         console.log('[AnyPNG] Server reported auth_required.',
-            { enableCookieAuth: !!enableCookieAuth, hasPermission, gotCookies: !!cookiesText, platform });
+            { enableCookieAuth: cookieAuthEnabled, hasPermission, gotCookies: !!cookiesText, platform });
 
         if (cookiesText) {
             toggleLoadingScreen(tab.id, true, "Retrying with your sign-in...");
             result = await postVideoDownload(tab.url, quality, cookiesText);
             usedCookies = true;
-        } else if (!enableCookieAuth) {
+        } else if (!cookieAuthEnabled) {
             throw new Error(`${result.message} You can enable "Use my YouTube sign-in for server downloads" in AnyPNG settings to retry these automatically.`);
         } else if (!hasPermission) {
             // Opted in, but the cookies permission was never granted or has since been
