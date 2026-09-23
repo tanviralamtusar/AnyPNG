@@ -108,7 +108,7 @@ function createContextMenus() {
     // removeAll first: on an extension update the previously registered items are
     // still around, and re-creating an existing id fails with "duplicate id".
     chrome.contextMenus.removeAll(() => {
-        chrome.contextMenus.create({ id: "pro_image_tools", title: "AnyPNG", contexts: ["page", "image"] });
+        chrome.contextMenus.create({ id: "pro_image_tools", title: "RightMate", contexts: ["page", "image"] });
         Object.entries(IMAGE_FORMATS).forEach(([key, { label }]) => {
             chrome.contextMenus.create({ id: `download_${key}`, title: label, parentId: "pro_image_tools", contexts: ["image"] });
         });
@@ -117,7 +117,7 @@ function createContextMenus() {
 
         // Generic direct-src video download — works for plain <video src> sites.
         // Hidden (via onShown below) on the platforms that get the quality submenu instead.
-        chrome.contextMenus.create({ id: "download_video", title: "⬇️ Download Video (AnyPNG)", contexts: ["video"] });
+        chrome.contextMenus.create({ id: "download_video", title: "⬇️ Download Video (RightMate)", contexts: ["video"] });
 
         // Quality-picker submenu for the four platforms with dedicated client-side handling.
         chrome.contextMenus.create({
@@ -321,7 +321,7 @@ async function setupOffscreenDocument(path) {
 
 function toggleLoadingScreen(tabId, show, text = "") {
     chrome.tabs.sendMessage(tabId, { action: show ? "SHOW_LOADING" : "HIDE_LOADING", text: text })
-        .catch(() => { if (show) chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'AnyPNG', message: text }); });
+        .catch(() => { if (show) chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'RightMate', message: text }); });
 }
 
 // ==========================================================
@@ -532,7 +532,7 @@ const MIN_VALID_VIDEO_BYTES = 50 * 1024;
 
 async function downloadDirectUrl(url, platform, sourceLabel) {
     await new Promise((resolve, reject) => {
-        chrome.downloads.download({ url, filename: `AnyPNG_${platform}_${Date.now()}.${guessVideoExt(url)}` }, (id) => {
+            chrome.downloads.download({ url, filename: `RightMate_${platform}_${Date.now()}.${guessVideoExt(url)}` }, (id) => {
             if (chrome.runtime.lastError || id === undefined) reject(new Error(chrome.runtime.lastError?.message || "Download failed"));
             else resolve(id);
         });
@@ -553,7 +553,7 @@ async function downloadCapturedUrl(url, platform, sourceLabel) {
         throw new Error(`Captured stream is too small (${buf.byteLength} bytes) to be real video — likely a protocol placeholder, not media data.`);
     }
     const dataUrl = await blobToDataUrl(new Blob([buf]));
-    chrome.downloads.download({ url: dataUrl, filename: `AnyPNG_${platform}_${Date.now()}.${guessVideoExt(url)}` });
+    chrome.downloads.download({ url: dataUrl, filename: `RightMate_${platform}_${Date.now()}.${guessVideoExt(url)}` });
     notifyVideoDownloadSource(sourceLabel);
 }
 
@@ -577,7 +577,7 @@ async function downloadAndRemux(videoUrl, audioUrl, platform) {
 
     if (result.error) throw new Error(result.error);
 
-    chrome.downloads.download({ url: `data:video/mp4;base64,${result.data}`, filename: `AnyPNG_${platform}_${Date.now()}.mp4` });
+    chrome.downloads.download({ url: `data:video/mp4;base64,${result.data}`, filename: `RightMate_${platform}_${Date.now()}.mp4` });
     notifyVideoDownloadSource("remuxed");
 }
 
@@ -652,7 +652,7 @@ async function downloadViaBackend(tab, quality, platform) {
             result = await postVideoDownload(tab.url, quality, cookiesText);
             usedCookies = true;
         } else if (!cookieAuthEnabled) {
-            throw new Error(`${result.message} You can enable "Use my YouTube sign-in for server downloads" in AnyPNG settings to retry these automatically.`);
+            throw new Error(`${result.message} You can enable "Use my YouTube sign-in for server downloads" in RightMate settings to retry these automatically.`);
         } else if (!hasPermission) {
             // Opted in, but the cookies permission was never granted or has since been
             // revoked from chrome://extensions. Without this the user would just see the
@@ -667,7 +667,7 @@ async function downloadViaBackend(tab, quality, platform) {
 
     const dataUrl = await blobToDataUrl(result.blob);
     const ext = quality === 'audio' ? 'mp3' : 'mp4';
-    chrome.downloads.download({ url: dataUrl, filename: `AnyPNG_${platform}_${Date.now()}.${ext}` });
+    chrome.downloads.download({ url: dataUrl, filename: `RightMate_${platform}_${Date.now()}.${ext}` });
     notifyVideoDownloadSource(usedCookies ? "serverAuth" : "server");
 }
 
@@ -679,7 +679,7 @@ async function resolveVideoDownload(tab, quality, pageUrlOverride) {
     const pageUrl = pageUrlOverride || tab.url;
     const platform = detectVideoPlatform(pageUrl);
     if (!platform) {
-        chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'AnyPNG', message: 'This page is not a supported video platform (YouTube, Instagram, Facebook, TikTok).' });
+        chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'RightMate', message: 'This page is not a supported video platform (YouTube, Instagram, Facebook, TikTok).' });
         return;
     }
 
@@ -688,7 +688,7 @@ async function resolveVideoDownload(tab, quality, pageUrlOverride) {
     // URL) — sending that bare page URL to the cascade/backend would otherwise fail
     // with a confusing "Unsupported URL" error instead of clear guidance.
     if (isObviouslyNotAVideoPage(platform, pageUrl)) {
-        chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'AnyPNG', message: "This looks like a feed or home page, not a specific video. Open the video's own page first, then try again." });
+        chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'RightMate', message: "This looks like a feed or home page, not a specific video. Open the video's own page first, then try again." });
         return;
     }
 
@@ -810,7 +810,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
                 const downloadUrl = await blobToDataUrl(finalBlob);
 
-                let prefix = info.menuItemId === "upscale_png" ? `AnyPNG_Upscaled_${scale}x` : `AnyPNG_Transparent`;
+                let prefix = info.menuItemId === "upscale_png" ? `RightMate_Upscaled_${scale}x` : `RightMate_Transparent`;
                 chrome.downloads.download({ url: downloadUrl, filename: `${prefix}_${Date.now()}.png` });
 
             } catch (error) {
@@ -844,7 +844,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             }));
 
             if (result.error) throw new Error(result.error);
-            chrome.downloads.download({ url: `data:${format.mimeType};base64,${result.data}`, filename: `AnyPNG_Converted_${Date.now()}.${format.ext}` });
+            chrome.downloads.download({ url: `data:${format.mimeType};base64,${result.data}`, filename: `RightMate_Converted_${Date.now()}.${format.ext}` });
 
         } catch (error) {
             chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Conversion Failed', message: error.message });
@@ -882,7 +882,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         const rawExt = (urlNoQuery.split('.').pop() || '').toLowerCase();
         const ext = /^[a-z0-9]{2,5}$/.test(rawExt) ? rawExt : 'mp4';
 
-        chrome.downloads.download({ url: info.srcUrl, filename: `AnyPNG_Video_${Date.now()}.${ext}` }, () => {
+        chrome.downloads.download({ url: info.srcUrl, filename: `RightMate_Video_${Date.now()}.${ext}` }, () => {
             if (chrome.runtime.lastError) {
                 chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Download Failed', message: chrome.runtime.lastError.message });
             }
@@ -914,8 +914,8 @@ async function callWatermarkBackend(prompt, session, method = "standard", downlo
     const accessToken = getAccessToken(session);
     if (!accessToken) {
         await chrome.storage.local.set({ watermarkProcessing: false });
-        chrome.runtime.sendMessage({ action: "SHOW_ERROR", error: "Session expired. Please open AnyPNG and log in again." }).catch(() => {
-            chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Login Required', message: 'Please open AnyPNG and log in again.' });
+        chrome.runtime.sendMessage({ action: "SHOW_ERROR", error: "Session expired. Please open RightMate and log in again." }).catch(() => {
+            chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Login Required', message: 'Please open RightMate and log in again.' });
         });
         return;
     }
@@ -965,7 +965,7 @@ async function callWatermarkBackend(prompt, session, method = "standard", downlo
         if (downloadResult) {
             chrome.downloads.download({
                 url: base64Data,
-                filename: `AnyPNG_Watermark_Removed_${Date.now()}.png`,
+                filename: `RightMate_Watermark_Removed_${Date.now()}.png`,
                 saveAs: false,
             }, (downloadId) => {
                 if (chrome.runtime.lastError) {
@@ -980,7 +980,7 @@ async function callWatermarkBackend(prompt, session, method = "standard", downlo
         // Notify popup if it's open
         chrome.runtime.sendMessage({ action: "UPDATE_PREVIEW", image: base64Data }).catch(() => {
             // If popup is closed, just show a notification
-            chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Watermark Removed!', message: 'Click the AnyPNG icon to view the result.' });
+            chrome.notifications.create({ type: 'basic', iconUrl: ICON_URL, title: 'Watermark Removed!', message: 'Click the RightMate icon to view the result.' });
         });
 
     } catch (error) {

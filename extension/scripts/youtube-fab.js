@@ -182,8 +182,8 @@
         const fab = document.createElement('button');
         fab.className = 'fab';
         fab.type = 'button';
-        fab.title = 'Download this video with AnyPNG';
-        fab.setAttribute('aria-label', 'Download this video with AnyPNG');
+        fab.title = 'Download this video with RightMate';
+        fab.setAttribute('aria-label', 'Download this video with RightMate');
         fab.setAttribute('aria-haspopup', 'menu');
         fab.setAttribute('aria-expanded', 'false');
         fab.innerHTML = DOWNLOAD_ICON;
