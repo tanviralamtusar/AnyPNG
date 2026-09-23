@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "RightMate",
-  "version": "2.4.5",
+  "version": "2.4.7",
   "description": "Right-click images to convert or upscale, or right-click videos to download them — powered by self-hosted AI backend.",
   "permissions": [
     "contextMenus",
