@@ -21,6 +21,8 @@ function driveSafeName(name, index) {
 }
 
 function driveSafeFolder(name) {
+    // Chrome download paths are relative to the browser's Downloads directory.
+    // A single sanitized directory name prevents absolute paths and traversal.
     const cleaned = String(name || 'Drive media').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/^\.+/, '').trim();
     return cleaned || 'Drive media';
 }
@@ -1014,16 +1016,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({ ok: false, error: 'No Drive media files were found.' });
             return;
         }
+        const folder = driveSafeFolder(message.folder);
         driveDownloadJobs.set(tabId, {
             files,
-            folder: driveSafeFolder(message.folder),
+            folder,
             cursor: 0,
             done: 0,
             failed: 0,
             stopped: false
         });
         nextDriveDownload(tabId);
-        sendResponse({ ok: true, total: files.length });
+        sendResponse({ ok: true, total: files.length, folder });
     } else if (message.action === 'STOP_DRIVE_VIDEO_QUEUE') {
         const tabId = sender.tab?.id;
         const job = driveDownloadJobs.get(tabId);

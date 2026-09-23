@@ -18,19 +18,20 @@
     shadow.innerHTML = `
       <style>
         #box{width:290px;background:#202124;color:#f8f9fa;border-radius:12px;padding:14px 15px;box-shadow:0 6px 24px #0008;transition:width .16s ease,padding .16s ease}
-        #bar{display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:grab;user-select:none;touch-action:none}#bar:active{cursor:grabbing}h1{font-size:14px;margin:0;font-weight:600;flex:1}.version{font-size:10px;color:#9aa0a6;font-weight:400}.note{font-size:12px;color:#bdc1c6;margin:0 0 12px}#status{min-height:34px;color:#e8eaed;word-break:break-word}.actions{display:flex;gap:8px;margin-top:10px}button{border:0;border-radius:7px;padding:8px 10px;font-weight:600;cursor:pointer}#start{background:#8ab4f8;color:#202124}#stop{background:#3c4043;color:#f8f9fa}button:disabled{opacity:.55;cursor:wait}#minimize{width:24px;height:24px;padding:0;background:transparent;color:#bdc1c6;font-size:18px;line-height:1;cursor:pointer}#box.minimized{width:auto;padding:9px 11px}#box.minimized #bar{margin:0}#box.minimized #content{display:none}
+        #bar{display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:grab;user-select:none;touch-action:none}#bar:active{cursor:grabbing}h1{font-size:14px;margin:0;font-weight:600;flex:1}.version{font-size:10px;color:#9aa0a6;font-weight:400}.note{font-size:12px;color:#bdc1c6;margin:0 0 12px}.folder-label{display:block;color:#bdc1c6;font-size:12px;margin:0 0 10px}.folder-label input{box-sizing:border-box;width:100%;margin-top:4px;padding:7px 8px;border:1px solid #5f6368;border-radius:6px;background:#303134;color:#f8f9fa;font:inherit}.folder-label input:focus{border-color:#8ab4f8;outline:1px solid #8ab4f8}.folder-label input:disabled{opacity:.6}#status{min-height:34px;color:#e8eaed;word-break:break-word}.actions{display:flex;gap:8px;margin-top:10px}button{border:0;border-radius:7px;padding:8px 10px;font-weight:600;cursor:pointer}#start{background:#8ab4f8;color:#202124}#stop{background:#3c4043;color:#f8f9fa}button:disabled{opacity:.55;cursor:wait}#minimize{width:24px;height:24px;padding:0;background:transparent;color:#bdc1c6;font-size:18px;line-height:1;cursor:pointer}#box.minimized{width:auto;padding:9px 11px}#box.minimized #bar{margin:0}#box.minimized #content{display:none}
       </style>
-      <div id="box"><div id="bar"><h1>AnyPNG Drive Downloader <span class="version">v${chrome.runtime.getManifest().version}</span></h1><button id="minimize" type="button" title="Minimize panel" aria-label="Minimize panel">−</button></div><div id="content"><p class="note">Downloads each image or video separately through Chrome, without a ZIP.</p><div id="status">Open a Drive folder containing media, then start.</div><div class="actions"><button id="start">Download media</button><button id="stop" disabled>Stop</button></div></div></div>`;
+      <div id="box"><div id="bar"><h1>AnyPNG Drive Downloader <span class="version">v${chrome.runtime.getManifest().version}</span></h1><button id="minimize" type="button" title="Minimize panel" aria-label="Minimize panel">−</button></div><div id="content"><p class="note">Downloads each image or video separately through Chrome, without a ZIP.</p><label class="folder-label" for="folder">Save to folder (inside Downloads)<input id="folder" type="text" value="Drive media" maxlength="120" autocomplete="off" spellcheck="false"></label><div id="status">Open a Drive folder containing media, then start.</div><div class="actions"><button id="start">Download media</button><button id="stop" disabled>Stop</button></div></div></div>`;
     document.documentElement.append(host);
 
     const start = shadow.querySelector('#start');
     const stop = shadow.querySelector('#stop');
+    const folder = shadow.querySelector('#folder');
     const status = shadow.querySelector('#status');
     const box = shadow.querySelector('#box');
     const bar = shadow.querySelector('#bar');
     const minimize = shadow.querySelector('#minimize');
     const setStatus = text => { status.textContent = text; };
-    const setControls = active => { start.disabled = active; stop.disabled = !active; };
+    const setControls = active => { start.disabled = active; stop.disabled = !active; folder.disabled = active; };
 
     minimize.addEventListener('click', event => {
         event.stopPropagation();
@@ -129,8 +130,9 @@
         if (stopRequested) { running = false; setControls(false); setStatus('Stopped before downloads started.'); return; }
         if (!files.length) { running = false; setControls(false); setStatus('No supported images or videos found. Wait for the folder to finish loading, then try again.'); return; }
         setStatus(`Found ${files.length} media file${files.length === 1 ? '' : 's'}. Starting Chrome downloads...`);
-        const response = await chrome.runtime.sendMessage({ action: 'START_DRIVE_VIDEO_QUEUE', files, folder: 'Drive media' });
+        const response = await chrome.runtime.sendMessage({ action: 'START_DRIVE_VIDEO_QUEUE', files, folder: folder.value });
         if (!response?.ok) { running = false; setControls(false); setStatus(response?.error || 'Could not start downloads.'); }
+        else folder.value = response.folder;
     });
     stop.addEventListener('click', async () => {
         stopRequested = true; await chrome.runtime.sendMessage({ action: 'STOP_DRIVE_VIDEO_QUEUE' });

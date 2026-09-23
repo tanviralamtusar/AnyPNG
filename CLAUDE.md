@@ -60,6 +60,10 @@ Manifest V3, no bundler — scripts are plain JS loaded directly by the manifest
 - `download_<format>` (`imageFormatFromMenuId`) — fully local conversion via the offscreen document; never touches the backend.
 - `download_video` / `video_quality_*` — video download cascade: direct URL download, or for platforms with dedicated handling (`detectVideoPlatform`), capture + remux locally, falling back to the backend's yt-dlp endpoint (`downloadViaBackend`) when needed.
 
+## Extension versioning
+
+For every change to extension functionality or extension-distributed assets, increment the patch version in `extension/manifest.json` before delivery.
+
 ## Local WebGPU inpainting demo (`src/`)
 
 TypeScript modules used by `src/main.ts`: `image-utils.ts` (ImageData/canvas/blob conversions and compositing), `mask-utils.ts` (mask thresholding, bounds, heuristic watermark-region detection), `crop-utils.ts` (padded-crop geometry for feeding a fixed-size model), `ocr-detector.ts` (Tesseract.js-based repeated-text detection to auto-locate watermarks), `webgpu-provider.ts` (loads the bundled LaMa ONNX model via onnxruntime-web/transformers.js and runs inference on WebGPU). Tests in `tests/` exercise the pure geometry/compositing functions in `image-utils.ts`, `mask-utils.ts`, and `crop-utils.ts` directly (no DOM; a minimal `ImageData` polyfill is defined at the top of the test file since vitest runs in a `node` environment).
