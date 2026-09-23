@@ -10,6 +10,82 @@ const IMAGE_FORMATS = {
 // lossless WebP; AVIF stays lossy at every value.
 const DEFAULT_CONVERSION_QUALITY = 0.9;
 
+// Per-tab Google Drive queues. Each file is handed to Chrome independently so
+// Drive never bundles a folder's videos into a ZIP archive.
+const driveDownloadJobs = new Map();
+
+function driveSafeName(name, index) {
+    const fallback = `drive-media-${index + 1}`;
+    const cleaned = String(name || fallback).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/^\.+/, '').trim();
+    return cleaned || fallback;
+}
+
+function driveSafeFolder(name) {
+    const cleaned = String(name || 'Drive media').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/^\.+/, '').trim();
+    return cleaned || 'Drive media';
+}
+
+function notifyDriveQueue(tabId, payload) {
+    chrome.tabs.sendMessage(tabId, { action: 'DRIVE_QUEUE_STATUS', ...payload }).catch(() => {});
+}
+
+function driveInitialDownloadUrl(file) {
+    const query = new URLSearchParams({ id: file.id, export: 'download', confirm: 't', _drive_dl: crypto.randomUUID() });
+    if (file.resourceKey) query.set('resourcekey', file.resourceKey);
+    return `https://drive.usercontent.google.com/download?${query}`;
+}
+
+function decodeDriveHtmlAttribute(value) {
+    return value.replaceAll('&amp;', '&').replaceAll('&quot;', '"').replaceAll('&#39;', "'").replaceAll('&lt;', '<').replaceAll('&gt;', '>');
+}
+
+function driveConfirmedUrlFromWarning(html) {
+    const form = html.match(/<form\b[^>]*\baction="([^"]+)"[^>]*>/i);
+    if (!form) return null;
+    const query = new URLSearchParams();
+    for (const match of html.matchAll(/<input\b[^>]*>/gi)) {
+        const name = match[0].match(/\bname="([^"]+)"/i);
+        const value = match[0].match(/\bvalue="([^"]*)"/i);
+        if (name && value) query.set(decodeDriveHtmlAttribute(name[1]), decodeDriveHtmlAttribute(value[1]));
+    }
+    if (!query.get('id') || !query.get('uuid') || !query.get('at')) return null;
+    return `${decodeDriveHtmlAttribute(form[1])}?${query}`;
+}
+
+async function resolveDriveDownloadUrl(file) {
+    const initialUrl = driveInitialDownloadUrl(file);
+    const response = await fetch(initialUrl, { cache: 'no-store', credentials: 'include' });
+    if (!(response.headers.get('content-type') || '').toLowerCase().includes('text/html')) {
+        await response.body?.cancel();
+        return initialUrl;
+    }
+    const confirmedUrl = driveConfirmedUrlFromWarning(await response.text());
+    if (!confirmedUrl) throw new Error('Drive returned HTML without a Download Anyway link.');
+    return confirmedUrl;
+}
+
+async function nextDriveDownload(tabId) {
+    const job = driveDownloadJobs.get(tabId);
+    if (!job || job.stopped) return;
+    const file = job.files[job.cursor];
+    if (!file) {
+        driveDownloadJobs.delete(tabId);
+        notifyDriveQueue(tabId, { state: 'finished', done: job.done, failed: job.failed, total: job.files.length });
+        return;
+    }
+    notifyDriveQueue(tabId, { state: 'downloading', name: file.name, done: job.done, failed: job.failed, total: job.files.length });
+    try {
+        const url = await resolveDriveDownloadUrl(file);
+        await chrome.downloads.download({ url, filename: `${job.folder}/${driveSafeName(file.name, job.cursor)}`, conflictAction: 'uniquify', saveAs: false });
+        job.done += 1;
+    } catch (error) {
+        job.failed += 1;
+        console.warn('Could not start Drive download', file.name, error);
+    }
+    job.cursor += 1;
+    setTimeout(() => nextDriveDownload(tabId), 900);
+}
+
 // "download_png" -> "png"; returns null for anything that isn't a local
 // conversion item (notably "download_video", which shares the prefix).
 function imageFormatFromMenuId(menuItemId) {
@@ -930,9 +1006,33 @@ async function callWatermarkBackend(prompt, session, method = "standard", downlo
 }
 
 // Runtime message listeners
-chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
-    if (message.action === "DOWNLOAD_VIDEO") {
-        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (activeTab) await resolveVideoDownload(activeTab, message.quality, message.url);
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action === 'START_DRIVE_VIDEO_QUEUE') {
+        const tabId = sender.tab?.id;
+        const files = Array.isArray(message.files) ? message.files.filter(file => file?.id) : [];
+        if (tabId === undefined || !files.length) {
+            sendResponse({ ok: false, error: 'No Drive media files were found.' });
+            return;
+        }
+        driveDownloadJobs.set(tabId, {
+            files,
+            folder: driveSafeFolder(message.folder),
+            cursor: 0,
+            done: 0,
+            failed: 0,
+            stopped: false
+        });
+        nextDriveDownload(tabId);
+        sendResponse({ ok: true, total: files.length });
+    } else if (message.action === 'STOP_DRIVE_VIDEO_QUEUE') {
+        const tabId = sender.tab?.id;
+        const job = driveDownloadJobs.get(tabId);
+        if (job) job.stopped = true;
+        driveDownloadJobs.delete(tabId);
+        sendResponse({ ok: true });
+    } else if (message.action === "DOWNLOAD_VIDEO") {
+        chrome.tabs.query({ active: true, currentWindow: true }).then(([activeTab]) => {
+            if (activeTab) return resolveVideoDownload(activeTab, message.quality, message.url);
+        }).catch(error => console.error('Video download request failed', error));
     }
 });

@@ -17,6 +17,7 @@
 - **Local Format Conversion**: Convert any web image to **PNG**, **WebP**, or **AVIF** locally — no upload, no server.
   PNG and WebP use the browser's canvas encoder; AVIF uses a bundled libavif (WASM) build, since Chrome's canvas cannot encode AVIF.
   Transparency is preserved in all three. Quality for the lossy formats is configurable in Settings.
+- **Google Drive Folder Downloads**: On a Google Drive folder page, use the AnyPNG panel to scan for common image and video formats and download each file separately to `Downloads/Drive media`, with progress, stop controls, and large-file confirmation support.
 - **Loading Overlay**: A beautiful glass-morphism loading screen appears during AI processing to keep you informed.
 - **API Connection Tester**: Easily verify your server connection directly from the settings page.
 - **Modern UI**: A premium, glassmorphism-inspired settings page for easy configuration.

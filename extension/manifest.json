@@ -37,6 +37,15 @@
         "scripts/youtube-fab.js"
       ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://drive.google.com/*"
+      ],
+      "js": [
+        "scripts/drive-downloader.js"
+      ],
+      "run_at": "document_idle"
     }
   ],
   "action": { "default_popup": "pages/popup.html" },
