@@ -6,10 +6,14 @@
     // Drive exposes these files through the same per-file download endpoint.
     // Keep this extension list explicit so documents and folders are never
     // accidentally queued when a user only wants media.
-    const MEDIA_EXTENSIONS = /\.(?:mp4|m4v|mov|avi|mkv|webm|wmv|flv|f4v|mpeg|mpg|3gp|3g2|mts|m2ts|ts|m2v|vob|ogv|ogm|asf|rm|rmvb|divx|dv|jpg|jpeg|jpe|png|gif|webp|avif|bmp|tif|tiff|svg|heic|heif|ico|raw|cr2|nef|arw|dng)$/i;
+    const VIDEO_EXTENSIONS = /\.(?:mp4|m4v|mov|avi|mkv|webm|wmv|flv|f4v|mpeg|mpg|3gp|3g2|mts|m2ts|ts|m2v|vob|ogv|ogm|asf|rm|rmvb|divx|dv)$/i;
+    const IMAGE_EXTENSIONS = /\.(?:jpg|jpeg|jpe|png|gif|webp|avif|bmp|tif|tiff|svg|heic|heif|ico|raw|cr2|nef|arw|dng)$/i;
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     let running = false;
     let stopRequested = false;
+    let activity = null;
+    let scannedFiles = [];
+    let selectedFilter = 'all';
 
     const host = document.createElement('div');
     host.id = 'anypng-drive-downloader-host';
@@ -18,20 +22,40 @@
     shadow.innerHTML = `
       <style>
         #box{width:290px;background:#202124;color:#f8f9fa;border-radius:12px;padding:14px 15px;box-shadow:0 6px 24px #0008;transition:width .16s ease,padding .16s ease}
-        #bar{display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:grab;user-select:none;touch-action:none}#bar:active{cursor:grabbing}h1{font-size:14px;margin:0;font-weight:600;flex:1}.version{font-size:10px;color:#9aa0a6;font-weight:400}.note{font-size:12px;color:#bdc1c6;margin:0 0 12px}.folder-label{display:block;color:#bdc1c6;font-size:12px;margin:0 0 10px}.folder-label input{box-sizing:border-box;width:100%;margin-top:4px;padding:7px 8px;border:1px solid #5f6368;border-radius:6px;background:#303134;color:#f8f9fa;font:inherit}.folder-label input:focus{border-color:#8ab4f8;outline:1px solid #8ab4f8}.folder-label input:disabled{opacity:.6}#status{min-height:34px;color:#e8eaed;word-break:break-word}.actions{display:flex;gap:8px;margin-top:10px}button{border:0;border-radius:7px;padding:8px 10px;font-weight:600;cursor:pointer}#start{background:#8ab4f8;color:#202124}#stop{background:#3c4043;color:#f8f9fa}button:disabled{opacity:.55;cursor:wait}#minimize{width:24px;height:24px;padding:0;background:transparent;color:#bdc1c6;font-size:18px;line-height:1;cursor:pointer}#box.minimized{width:auto;padding:9px 11px}#box.minimized #bar{margin:0}#box.minimized #content{display:none}
+        #bar{display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:grab;user-select:none;touch-action:none}#bar:active{cursor:grabbing}h1{font-size:14px;margin:0;font-weight:600;flex:1}.version{font-size:10px;color:#9aa0a6;font-weight:400}.note{font-size:12px;color:#bdc1c6;margin:0 0 12px}.folder-label{display:block;color:#bdc1c6;font-size:12px;margin:0 0 10px}.folder-label input{box-sizing:border-box;width:100%;margin-top:4px;padding:7px 8px;border:1px solid #5f6368;border-radius:6px;background:#303134;color:#f8f9fa;font:inherit}.folder-label input:focus{border-color:#8ab4f8;outline:1px solid #8ab4f8}.folder-label input:disabled{opacity:.6}#status{min-height:34px;color:#e8eaed;word-break:break-word}.filters{display:flex;gap:6px;margin:0 0 10px}.filters button{flex:1;padding:6px 5px;background:#3c4043;color:#e8eaed;font-size:11px}.filters button.selected{background:#8ab4f8;color:#202124}.actions{display:flex;gap:8px;margin-top:10px}button{border:0;border-radius:7px;padding:8px 10px;font-weight:600;cursor:pointer}#scan{background:#e8eaed;color:#202124}#start{background:#8ab4f8;color:#202124}#stop{background:#3c4043;color:#f8f9fa}button:disabled{opacity:.55;cursor:wait}#minimize{width:24px;height:24px;padding:0;background:transparent;color:#bdc1c6;font-size:18px;line-height:1;cursor:pointer}#box.minimized{width:auto;padding:9px 11px}#box.minimized #bar{margin:0}#box.minimized #content{display:none}
       </style>
-      <div id="box"><div id="bar"><h1>AnyPNG Drive Downloader <span class="version">v${chrome.runtime.getManifest().version}</span></h1><button id="minimize" type="button" title="Minimize panel" aria-label="Minimize panel">−</button></div><div id="content"><p class="note">Downloads each image or video separately through Chrome, without a ZIP.</p><label class="folder-label" for="folder">Save to folder (inside Downloads)<input id="folder" type="text" value="Drive media" maxlength="120" autocomplete="off" spellcheck="false"></label><div id="status">Open a Drive folder containing media, then start.</div><div class="actions"><button id="start">Download media</button><button id="stop" disabled>Stop</button></div></div></div>`;
+      <div id="box"><div id="bar"><h1>AnyPNG Drive Downloader <span class="version">v${chrome.runtime.getManifest().version}</span></h1><button id="minimize" type="button" title="Minimize panel" aria-label="Minimize panel">−</button></div><div id="content"><p class="note">Scan first, then download selected media separately through Chrome.</p><label class="folder-label" for="folder">Save to folder (inside Downloads)<input id="folder" type="text" value="Drive media" maxlength="120" autocomplete="off" spellcheck="false"></label><div id="status">Scan this Drive folder to find downloadable media.</div><div class="filters" role="group" aria-label="Media type"><button data-filter="all" disabled>All (0)</button><button data-filter="video" disabled>Videos (0)</button><button data-filter="image" disabled>Images (0)</button></div><div class="actions"><button id="scan">Scan folder</button><button id="start" disabled>Download selected</button><button id="stop" disabled>Stop</button></div></div></div>`;
     document.documentElement.append(host);
 
     const start = shadow.querySelector('#start');
+    const scan = shadow.querySelector('#scan');
     const stop = shadow.querySelector('#stop');
     const folder = shadow.querySelector('#folder');
     const status = shadow.querySelector('#status');
     const box = shadow.querySelector('#box');
     const bar = shadow.querySelector('#bar');
     const minimize = shadow.querySelector('#minimize');
+    const filterButtons = [...shadow.querySelectorAll('[data-filter]')];
     const setStatus = text => { status.textContent = text; };
-    const setControls = active => { start.disabled = active; stop.disabled = !active; folder.disabled = active; };
+    const filesForSelection = () => selectedFilter === 'all' ? scannedFiles : scannedFiles.filter(file => file.kind === selectedFilter);
+    const counts = () => ({ all: scannedFiles.length, video: scannedFiles.filter(file => file.kind === 'video').length, image: scannedFiles.filter(file => file.kind === 'image').length });
+    const updateSelection = () => {
+        const count = counts();
+        filterButtons.forEach(button => {
+            const filter = button.dataset.filter;
+            button.textContent = `${filter === 'all' ? 'All' : filter === 'video' ? 'Videos' : 'Images'} (${count[filter]})`;
+            button.classList.toggle('selected', filter === selectedFilter);
+            button.disabled = running || count[filter] === 0;
+        });
+        start.disabled = running || filesForSelection().length === 0;
+    };
+    const setControls = active => {
+        running = active;
+        scan.disabled = active;
+        stop.disabled = !active;
+        folder.disabled = active;
+        updateSelection();
+    };
 
     minimize.addEventListener('click', event => {
         event.stopPropagation();
@@ -73,8 +97,8 @@
             ...[...element.querySelectorAll('[data-tooltip], [aria-label], [title]')].slice(0, 12).flatMap(child => [child.getAttribute('data-tooltip'), child.getAttribute('aria-label'), child.title]),
             element.innerText].filter(Boolean);
         for (const value of values) {
-            const match = String(value).match(/[^\n\\/]+\.(?:mp4|m4v|mov|avi|mkv|webm|wmv|flv|mpeg|mpg|3gp|mts|m2ts)/i);
-            if (match) return match[0].trim();
+            const match = String(value).match(/[^\n\\/]+\.[a-z0-9]+/i);
+            if (match && (VIDEO_EXTENSIONS.test(match[0]) || IMAGE_EXTENSIONS.test(match[0]))) return match[0].trim();
         }
         return null;
     }
@@ -83,9 +107,10 @@
         for (const element of document.querySelectorAll('[data-id]')) {
             const name = nameFrom(element);
             const id = element.getAttribute('data-id');
-            if (!id || !name || !MEDIA_EXTENSIONS.test(name)) continue;
+            const kind = VIDEO_EXTENSIONS.test(name) ? 'video' : IMAGE_EXTENSIONS.test(name) ? 'image' : null;
+            if (!id || !name || !kind) continue;
             const resourceKey = element.getAttribute('data-resource-key') || element.getAttribute('data-resourcekey') || '';
-            found.set(id, { id, name, resourceKey });
+            found.set(id, { id, name, resourceKey, kind });
         }
     }
 
@@ -123,24 +148,48 @@
         return [...found.values()];
     }
 
+    scan.addEventListener('click', async () => {
+        if (running) return;
+        activity = 'scan'; stopRequested = false; setControls(true); setStatus('Scanning this Drive folder...');
+        scannedFiles = await scanFolder();
+        activity = null; setControls(false);
+        if (stopRequested) { setStatus('Scan stopped. Click Scan folder to try again.'); return; }
+        if (!scannedFiles.length) { setStatus('No supported images or videos found. Wait for the folder to finish loading, then scan again.'); return; }
+        const count = counts();
+        setStatus(`Scan complete: ${count.video} video${count.video === 1 ? '' : 's'} and ${count.image} image${count.image === 1 ? '' : 's'} found. Choose what to download.`);
+    });
+
+    filterButtons.forEach(button => button.addEventListener('click', () => {
+        selectedFilter = button.dataset.filter;
+        updateSelection();
+        const count = filesForSelection().length;
+        setStatus(`${count} ${selectedFilter === 'all' ? 'media file' : selectedFilter === 'video' ? 'video' : 'image'}${count === 1 ? '' : 's'} selected.`);
+    }));
+
     start.addEventListener('click', async () => {
         if (running) return;
-        running = true; stopRequested = false; setControls(true); setStatus('Scanning this Drive folder...');
-        const files = await scanFolder();
-        if (stopRequested) { running = false; setControls(false); setStatus('Stopped before downloads started.'); return; }
-        if (!files.length) { running = false; setControls(false); setStatus('No supported images or videos found. Wait for the folder to finish loading, then try again.'); return; }
-        setStatus(`Found ${files.length} media file${files.length === 1 ? '' : 's'}. Starting Chrome downloads...`);
+        const files = filesForSelection();
+        if (!files.length) return;
+        activity = 'download'; stopRequested = false; setControls(true);
+        setStatus(`Starting ${files.length} selected download${files.length === 1 ? '' : 's'}...`);
         const response = await chrome.runtime.sendMessage({ action: 'START_DRIVE_VIDEO_QUEUE', files, folder: folder.value });
-        if (!response?.ok) { running = false; setControls(false); setStatus(response?.error || 'Could not start downloads.'); }
+        if (!response?.ok) { activity = null; setControls(false); setStatus(response?.error || 'Could not start downloads.'); }
         else folder.value = response.folder;
     });
     stop.addEventListener('click', async () => {
-        stopRequested = true; await chrome.runtime.sendMessage({ action: 'STOP_DRIVE_VIDEO_QUEUE' });
-        running = false; setControls(false); setStatus('Stopped. Downloads already started remain in Chrome.');
+        stopRequested = true;
+        await chrome.runtime.sendMessage({ action: 'STOP_DRIVE_VIDEO_QUEUE' });
+        if (activity === 'download') {
+            activity = null;
+            setControls(false);
+            setStatus('Stopped. Downloads already started remain in Chrome.');
+        } else if (activity === 'scan') {
+            setStatus('Stopping scan...');
+        }
     });
     chrome.runtime.onMessage.addListener(message => {
         if (message?.action !== 'DRIVE_QUEUE_STATUS') return;
         if (message.state === 'downloading') setStatus(`Starting ${message.done + message.failed + 1}/${message.total}: ${message.name}`);
-        if (message.state === 'finished') { running = false; setControls(false); setStatus(`Finished: ${message.done} started${message.failed ? `, ${message.failed} failed` : ''}. Check Chrome Downloads.`); }
+        if (message.state === 'finished') { activity = null; setControls(false); setStatus(`Finished: ${message.done} started${message.failed ? `, ${message.failed} failed` : ''}. Check Chrome Downloads.`); }
     });
 })();
