@@ -226,10 +226,6 @@ body {
   justify-content: flex-end;
 }
 
-#general .setting-row:nth-of-type(5) {
-  grid-column: 1 / -1;
-}
-
 #general .actions {
   margin-top: 14px;
 }
@@ -287,6 +283,27 @@ h1 {
 
 .setting-control select {
   min-width: 190px;
+}
+
+.drive-download-controls {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.drive-download-controls label {
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.drive-download-controls .settings-input,
+.drive-download-controls select {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  margin-top: 5px;
 }
 
 /* Controls */
@@ -531,6 +548,10 @@ input:checked + .slider:before {
   .settings-input {
     width: 100%;
     max-width: none;
+  }
+
+  .drive-download-controls {
+    grid-template-columns: 1fr;
   }
 }
 

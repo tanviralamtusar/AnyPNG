@@ -145,6 +145,17 @@
           </div>
         </div>
 
+        <div class="setting-row">
+          <div class="setting-info">
+            <label>Google Drive downloads</label>
+            <p class="description">Choose where Drive media is saved inside Chrome&rsquo;s Downloads folder and how many files can download at once.</p>
+          </div>
+          <div class="setting-control drive-download-controls">
+            <label>Folder<input type="text" id="driveDownloadFolder" class="settings-input" value="Drive media" maxlength="120" autocomplete="off" spellcheck="false"></label>
+            <label>Concurrent downloads<select id="driveDownloadConcurrency"><option value="1">1 at a time</option><option value="2">2 at a time</option><option value="3">3 at a time</option><option value="4">4 at a time</option><option value="5">5 at a time</option></select></label>
+          </div>
+        </div>
+
         <div class="actions">
           <button id="saveBtn" class="save-button">Save Changes</button>
           <span id="status">All changes saved!</span>

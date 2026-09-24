@@ -29,7 +29,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // Load sync settings
-    chrome.storage.sync.get(['upscaleFactor', 'conversionQuality', 'defaultVideoQuality', 'showYoutubeButton'], (result) => {
+    chrome.storage.sync.get(['upscaleFactor', 'conversionQuality', 'defaultVideoQuality', 'showYoutubeButton', 'driveDownloadFolder', 'driveDownloadConcurrency'], (result) => {
         if (result.upscaleFactor) {
             document.getElementById('upscaleFactor').value = result.upscaleFactor;
         }
@@ -41,6 +41,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         // Absent means "never configured", and this one is on by default.
         document.getElementById('showYoutubeButton').checked = result.showYoutubeButton !== false;
+        document.getElementById('driveDownloadFolder').value = result.driveDownloadFolder || 'Drive media';
+        document.getElementById('driveDownloadConcurrency').value = ['1', '2', '3', '4', '5'].includes(String(result.driveDownloadConcurrency)) ? String(result.driveDownloadConcurrency) : '3';
     });
 
     // Cookie-assisted retries are enabled unless the user explicitly opts out.
@@ -362,8 +364,10 @@ document.getElementById('saveBtn').addEventListener('click', () => {
     const conversionQuality = document.getElementById('conversionQuality').value;
     const defaultVideoQuality = document.getElementById('defaultVideoQuality').value;
     const showYoutubeButton = document.getElementById('showYoutubeButton').checked;
+    const driveDownloadFolder = document.getElementById('driveDownloadFolder').value;
+    const driveDownloadConcurrency = document.getElementById('driveDownloadConcurrency').value;
 
-    chrome.storage.sync.set({ upscaleFactor, conversionQuality, defaultVideoQuality, showYoutubeButton }, () => {
+    chrome.storage.sync.set({ upscaleFactor, conversionQuality, defaultVideoQuality, showYoutubeButton, driveDownloadFolder, driveDownloadConcurrency }, () => {
         const status = document.getElementById('status');
         status.classList.add('show');
 
