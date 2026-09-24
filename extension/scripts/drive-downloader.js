@@ -22,15 +22,16 @@
     shadow.innerHTML = `
       <style>
         #box{width:290px;background:#202124;color:#f8f9fa;border-radius:12px;padding:14px 15px;box-shadow:0 6px 24px #0008;transition:width .16s ease,padding .16s ease}
-        #bar{display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:grab;user-select:none;touch-action:none}#bar:active{cursor:grabbing}h1{font-size:14px;margin:0;font-weight:600;flex:1}.version{font-size:10px;color:#9aa0a6;font-weight:400}.note{font-size:12px;color:#bdc1c6;margin:0 0 12px}.folder-label{display:block;color:#bdc1c6;font-size:12px;margin:0 0 10px}.folder-label input{box-sizing:border-box;width:100%;margin-top:4px;padding:7px 8px;border:1px solid #5f6368;border-radius:6px;background:#303134;color:#f8f9fa;font:inherit}.folder-label input:focus{border-color:#8ab4f8;outline:1px solid #8ab4f8}.folder-label input:disabled{opacity:.6}#status{min-height:34px;color:#e8eaed;word-break:break-word}.filters{display:flex;gap:6px;margin:0 0 10px}.filters button{flex:1;padding:6px 5px;background:#3c4043;color:#e8eaed;font-size:11px}.filters button.selected{background:#8ab4f8;color:#202124}.actions{display:flex;gap:8px;margin-top:10px}button{border:0;border-radius:7px;padding:8px 10px;font-weight:600;cursor:pointer}#scan{background:#e8eaed;color:#202124}#start{background:#8ab4f8;color:#202124}#stop{background:#3c4043;color:#f8f9fa}button:disabled{opacity:.55;cursor:wait}#minimize{width:24px;height:24px;padding:0;background:transparent;color:#bdc1c6;font-size:18px;line-height:1;cursor:pointer}#box.minimized{width:auto;padding:9px 11px}#box.minimized #bar{margin:0}#box.minimized #content{display:none}
+        #bar{display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:grab;user-select:none;touch-action:none}#bar:active{cursor:grabbing}h1{font-size:14px;margin:0;font-weight:600;flex:1}.version{font-size:10px;color:#9aa0a6;font-weight:400}.note{font-size:12px;color:#bdc1c6;margin:0 0 12px}.folder-label{display:block;color:#bdc1c6;font-size:12px;margin:0 0 10px}.folder-label input,.folder-label select{box-sizing:border-box;width:100%;margin-top:4px;padding:7px 8px;border:1px solid #5f6368;border-radius:6px;background:#303134;color:#f8f9fa;font:inherit}.folder-label input:focus,.folder-label select:focus{border-color:#8ab4f8;outline:1px solid #8ab4f8}.folder-label input:disabled,.folder-label select:disabled{opacity:.6}#status{min-height:34px;color:#e8eaed;word-break:break-word}.filters{display:flex;gap:6px;margin:0 0 10px}.filters button{flex:1;padding:6px 5px;background:#3c4043;color:#e8eaed;font-size:11px}.filters button.selected{background:#8ab4f8;color:#202124}.actions{display:flex;gap:8px;margin-top:10px}button{border:0;border-radius:7px;padding:8px 10px;font-weight:600;cursor:pointer}#scan{background:#e8eaed;color:#202124}#start{background:#8ab4f8;color:#202124}#stop{background:#3c4043;color:#f8f9fa}button:disabled{opacity:.55;cursor:wait}#minimize{width:24px;height:24px;padding:0;background:transparent;color:#bdc1c6;font-size:18px;line-height:1;cursor:pointer}#box.minimized{width:auto;padding:9px 11px}#box.minimized #bar{margin:0}#box.minimized #content{display:none}
       </style>
-      <div id="box"><div id="bar"><h1>RightMate Drive Downloader <span class="version">v${chrome.runtime.getManifest().version}</span></h1><button id="minimize" type="button" title="Minimize panel" aria-label="Minimize panel">−</button></div><div id="content"><p class="note">Scan first, then download selected media separately through Chrome.</p><label class="folder-label" for="folder">Save to folder (inside Downloads)<input id="folder" type="text" value="Drive media" maxlength="120" autocomplete="off" spellcheck="false"></label><div id="status">Scan this Drive folder to find downloadable media.</div><div class="filters" role="group" aria-label="Media type"><button data-filter="all" disabled>All (0)</button><button data-filter="video" disabled>Videos (0)</button><button data-filter="image" disabled>Images (0)</button></div><div class="actions"><button id="scan">Scan folder</button><button id="start" disabled>Download selected</button><button id="stop" disabled>Stop</button></div></div></div>`;
+      <div id="box"><div id="bar"><h1>RightMate Drive Downloader <span class="version">v${chrome.runtime.getManifest().version}</span></h1><button id="minimize" type="button" title="Minimize panel" aria-label="Minimize panel">−</button></div><div id="content"><p class="note">Scan first, then download selected media separately through Chrome.</p><label class="folder-label" for="folder">Save to folder (inside Downloads)<input id="folder" type="text" value="Drive media" maxlength="120" autocomplete="off" spellcheck="false"></label><label class="folder-label" for="concurrency">Concurrent downloads<select id="concurrency"><option value="1">1 at a time</option><option value="2">2 at a time</option><option value="3" selected>3 at a time</option><option value="4">4 at a time</option><option value="5">5 at a time</option></select></label><div id="status">Scan this Drive folder to find downloadable media.</div><div class="filters" role="group" aria-label="Media type"><button data-filter="all" disabled>All (0)</button><button data-filter="video" disabled>Videos (0)</button><button data-filter="image" disabled>Images (0)</button></div><div class="actions"><button id="scan">Scan folder</button><button id="start" disabled>Download selected</button><button id="stop" disabled>Stop</button></div></div></div>`;
     document.documentElement.append(host);
 
     const start = shadow.querySelector('#start');
     const scan = shadow.querySelector('#scan');
     const stop = shadow.querySelector('#stop');
     const folder = shadow.querySelector('#folder');
+    const concurrency = shadow.querySelector('#concurrency');
     const status = shadow.querySelector('#status');
     const box = shadow.querySelector('#box');
     const bar = shadow.querySelector('#bar');
@@ -54,6 +55,7 @@
         scan.disabled = active;
         stop.disabled = !active;
         folder.disabled = active;
+        concurrency.disabled = active;
         updateSelection();
     };
 
@@ -172,9 +174,9 @@
         if (!files.length) return;
         activity = 'download'; stopRequested = false; setControls(true);
         setStatus(`Starting ${files.length} selected download${files.length === 1 ? '' : 's'}...`);
-        const response = await chrome.runtime.sendMessage({ action: 'START_DRIVE_VIDEO_QUEUE', files, folder: folder.value });
+        const response = await chrome.runtime.sendMessage({ action: 'START_DRIVE_VIDEO_QUEUE', files, folder: folder.value, concurrency: concurrency.value });
         if (!response?.ok) { activity = null; setControls(false); setStatus(response?.error || 'Could not start downloads.'); }
-        else folder.value = response.folder;
+        else { folder.value = response.folder; concurrency.value = String(response.concurrency); }
     });
     stop.addEventListener('click', async () => {
         stopRequested = true;
@@ -189,7 +191,7 @@
     });
     chrome.runtime.onMessage.addListener(message => {
         if (message?.action !== 'DRIVE_QUEUE_STATUS') return;
-        if (message.state === 'downloading') setStatus(`Starting ${message.done + message.failed + 1}/${message.total}: ${message.name}`);
-        if (message.state === 'finished') { activity = null; setControls(false); setStatus(`Finished: ${message.done} started${message.failed ? `, ${message.failed} failed` : ''}. Check Chrome Downloads.`); }
+        if (message.state === 'downloading') setStatus(`Starting ${message.started}/${message.total}: ${message.name} (${message.active} active)`);
+        if (message.state === 'finished') { activity = null; setControls(false); setStatus(`Finished: ${message.done} completed${message.failed ? `, ${message.failed} failed` : ''}. Check Chrome Downloads.`); }
     });
 })();

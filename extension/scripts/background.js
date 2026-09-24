@@ -13,6 +13,7 @@ const DEFAULT_CONVERSION_QUALITY = 0.9;
 // Per-tab Google Drive queues. Each file is handed to Chrome independently so
 // Drive never bundles a folder's videos into a ZIP archive.
 const driveDownloadJobs = new Map();
+const driveDownloadOwners = new Map();
 
 function driveSafeName(name, index) {
     const fallback = `drive-media-${index + 1}`;
@@ -66,27 +67,72 @@ async function resolveDriveDownloadUrl(file) {
     return confirmedUrl;
 }
 
-async function nextDriveDownload(tabId) {
+function driveConcurrency(value) {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? Math.min(5, Math.max(1, parsed)) : 3;
+}
+
+function finishDriveQueue(tabId, job) {
+    if (job.cursor < job.files.length || job.pending > 0 || job.active.size > 0) return;
+    driveDownloadJobs.delete(tabId);
+    notifyDriveQueue(tabId, { state: 'finished', done: job.done, failed: job.failed, total: job.files.length });
+}
+
+function completeDriveDownload(tabId, downloadId, successful) {
     const job = driveDownloadJobs.get(tabId);
-    if (!job || job.stopped) return;
-    const file = job.files[job.cursor];
-    if (!file) {
-        driveDownloadJobs.delete(tabId);
-        notifyDriveQueue(tabId, { state: 'finished', done: job.done, failed: job.failed, total: job.files.length });
-        return;
-    }
-    notifyDriveQueue(tabId, { state: 'downloading', name: file.name, done: job.done, failed: job.failed, total: job.files.length });
+    if (!job || !job.active.has(downloadId)) return;
+    job.active.delete(downloadId);
+    driveDownloadOwners.delete(downloadId);
+    if (successful) job.done += 1;
+    else job.failed += 1;
+    if (!job.stopped) fillDriveDownloads(tabId);
+}
+
+async function launchDriveDownload(tabId, job, file, index) {
     try {
         const url = await resolveDriveDownloadUrl(file);
-        await chrome.downloads.download({ url, filename: `${job.folder}/${driveSafeName(file.name, job.cursor)}`, conflictAction: 'uniquify', saveAs: false });
-        job.done += 1;
+        if (job.stopped || driveDownloadJobs.get(tabId) !== job) return;
+        const downloadId = await chrome.downloads.download({
+            url,
+            filename: `${job.folder}/${driveSafeName(file.name, index)}`,
+            conflictAction: 'uniquify',
+            saveAs: false
+        });
+        if (job.stopped || driveDownloadJobs.get(tabId) !== job) return;
+        job.active.set(downloadId, file);
+        driveDownloadOwners.set(downloadId, tabId);
+        const [download] = await chrome.downloads.search({ id: downloadId });
+        if (download?.state === 'complete' || download?.state === 'interrupted') {
+            completeDriveDownload(tabId, downloadId, download.state === 'complete');
+        }
     } catch (error) {
         job.failed += 1;
         console.warn('Could not start Drive download', file.name, error);
+    } finally {
+        job.pending -= 1;
+        if (!job.stopped && driveDownloadJobs.get(tabId) === job) fillDriveDownloads(tabId);
     }
-    job.cursor += 1;
-    setTimeout(() => nextDriveDownload(tabId), 900);
 }
+
+function fillDriveDownloads(tabId) {
+    const job = driveDownloadJobs.get(tabId);
+    if (!job || job.stopped) return;
+    while (job.cursor < job.files.length && job.active.size + job.pending < job.concurrency) {
+        const index = job.cursor;
+        const file = job.files[job.cursor++];
+        job.pending += 1;
+        notifyDriveQueue(tabId, { state: 'downloading', name: file.name, done: job.done, failed: job.failed, started: job.cursor, active: job.active.size + job.pending, total: job.files.length });
+        void launchDriveDownload(tabId, job, file, index);
+    }
+    finishDriveQueue(tabId, job);
+}
+
+chrome.downloads.onChanged.addListener(delta => {
+    const state = delta.state?.current;
+    if (state !== 'complete' && state !== 'interrupted') return;
+    const tabId = driveDownloadOwners.get(delta.id);
+    if (tabId !== undefined) completeDriveDownload(tabId, delta.id, state === 'complete');
+});
 
 // "download_png" -> "png"; returns null for anything that isn't a local
 // conversion item (notably "download_video", which shares the prefix).
@@ -1017,20 +1063,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return;
         }
         const folder = driveSafeFolder(message.folder);
+        const concurrency = driveConcurrency(message.concurrency);
         driveDownloadJobs.set(tabId, {
             files,
             folder,
             cursor: 0,
             done: 0,
             failed: 0,
+            pending: 0,
+            active: new Map(),
+            concurrency,
             stopped: false
         });
-        nextDriveDownload(tabId);
-        sendResponse({ ok: true, total: files.length, folder });
+        fillDriveDownloads(tabId);
+        sendResponse({ ok: true, total: files.length, folder, concurrency });
     } else if (message.action === 'STOP_DRIVE_VIDEO_QUEUE') {
         const tabId = sender.tab?.id;
         const job = driveDownloadJobs.get(tabId);
-        if (job) job.stopped = true;
+        if (job) {
+            job.stopped = true;
+            for (const downloadId of job.active.keys()) driveDownloadOwners.delete(downloadId);
+        }
         driveDownloadJobs.delete(tabId);
         sendResponse({ ok: true });
     } else if (message.action === "DOWNLOAD_VIDEO") {
