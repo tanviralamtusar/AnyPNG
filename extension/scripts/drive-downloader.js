@@ -25,9 +25,9 @@
     shadow.innerHTML = `
       <style>
         #box{width:290px;background:#202124;color:#f8f9fa;border-radius:12px;padding:14px 15px;box-shadow:0 6px 24px #0008;transition:width .16s ease,padding .16s ease}
-        #bar{display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:grab;user-select:none;touch-action:none}#bar:active{cursor:grabbing}h1{font-size:14px;margin:0;font-weight:600;flex:1}.version{font-size:10px;color:#9aa0a6;font-weight:400}.note{font-size:12px;color:#bdc1c6;margin:0 0 12px}#status{min-height:34px;color:#e8eaed;word-break:break-word}.filters{display:flex;gap:6px;margin:0 0 10px}.filters button{flex:1;padding:6px 5px;background:#3c4043;color:#e8eaed;font-size:11px}.filters button.selected{background:#8ab4f8;color:#202124}.actions{display:flex;gap:8px;margin-top:10px}button{border:0;border-radius:7px;padding:8px 10px;font-weight:600;cursor:pointer}#scan{background:#e8eaed;color:#202124}#start{background:#8ab4f8;color:#202124}#stop{background:#3c4043;color:#f8f9fa}button:disabled{opacity:.55;cursor:wait}#minimize{width:24px;height:24px;padding:0;background:transparent;color:#bdc1c6;font-size:18px;line-height:1;cursor:pointer}#box.minimized{width:auto;padding:9px 11px}#box.minimized #bar{margin:0}#box.minimized #content{display:none}
+        #bar{display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:grab;user-select:none;touch-action:none}#bar:active{cursor:grabbing}h1{font-size:14px;margin:0;font-weight:600;flex:1}.version{font-size:10px;color:#9aa0a6;font-weight:400}.note{font-size:12px;color:#bdc1c6;margin:0 0 12px}#status{min-height:34px;color:#e8eaed;word-break:break-word}.filters{display:flex;gap:6px;margin:0 0 10px}.filters button{flex:1;padding:6px 5px;background:#3c4043;color:#e8eaed;font-size:11px}.filters button.selected{background:#8ab4f8;color:#202124}.actions{display:flex;gap:8px;margin-top:10px}button{border:0;border-radius:7px;padding:8px 10px;font-weight:600;cursor:pointer}#scan{background:#e8eaed;color:#202124}#start{background:#8ab4f8;color:#202124}#stop{background:#3c4043;color:#f8f9fa}button:disabled{opacity:.55;cursor:wait}.hidden{display:none!important}#minimize{width:24px;height:24px;padding:0;background:transparent;color:#bdc1c6;font-size:18px;line-height:1;cursor:pointer}#box.minimized{width:auto;padding:9px 11px}#box.minimized #bar{margin:0}#box.minimized #content{display:none}
       </style>
-      <div id="box"><div id="bar"><h1>RightMate Drive Downloader <span class="version">v${chrome.runtime.getManifest().version}</span></h1><button id="minimize" type="button" title="Minimize panel" aria-label="Minimize panel">−</button></div><div id="content"><p class="note">Scan first, then download selected files separately through Chrome. Configure the destination and download limit in RightMate Settings.</p><div id="status">Scan this Drive folder to find downloadable files.</div><div class="filters" role="group" aria-label="File type"><button data-filter="all" disabled>All (0)</button><button data-filter="video" disabled>Videos (0)</button><button data-filter="image" disabled>Images (0)</button><button data-filter="other" disabled>Other (0)</button></div><div class="actions"><button id="scan">Scan folder</button><button id="start" disabled>Download selected</button><button id="stop" disabled>Stop</button></div></div></div>`;
+      <div id="box"><div id="bar"><h1>RightMate Drive Downloader <span class="version">v${chrome.runtime.getManifest().version}</span></h1><button id="minimize" type="button" title="Minimize panel" aria-label="Minimize panel">−</button></div><div id="content"><p class="note">Scan first, then download selected files separately through Chrome. Configure the destination and download limit in RightMate Settings.</p><div id="status">Scan this Drive folder to find downloadable files.</div><div class="filters hidden" role="group" aria-label="File type"><button data-filter="all" disabled>All (0)</button><button data-filter="video" disabled>Videos (0)</button><button data-filter="image" disabled>Images (0)</button><button data-filter="other" disabled>Other (0)</button></div><div class="actions"><button id="scan">Scan folder</button><button id="start" class="hidden" disabled>Download selected</button><button id="stop" class="hidden" disabled>Stop</button></div></div></div>`;
     document.documentElement.append(host);
 
     const applyDrivePreferences = values => {
@@ -50,6 +50,7 @@
     const scan = shadow.querySelector('#scan');
     const stop = shadow.querySelector('#stop');
     const status = shadow.querySelector('#status');
+    const filters = shadow.querySelector('.filters');
     const box = shadow.querySelector('#box');
     const bar = shadow.querySelector('#bar');
     const minimize = shadow.querySelector('#minimize');
@@ -57,6 +58,11 @@
     const setStatus = text => { status.textContent = text; };
     const filesForSelection = () => selectedFilter === 'all' ? scannedFiles : scannedFiles.filter(file => file.kind === selectedFilter);
     const counts = () => ({ all: scannedFiles.length, video: scannedFiles.filter(file => file.kind === 'video').length, image: scannedFiles.filter(file => file.kind === 'image').length, other: scannedFiles.filter(file => file.kind === 'other').length });
+    const setResultsVisible = visible => {
+        filters.classList.toggle('hidden', !visible);
+        start.classList.toggle('hidden', !visible);
+        if (!visible) stop.classList.add('hidden');
+    };
     const updateSelection = () => {
         const count = counts();
         filterButtons.forEach(button => {
@@ -64,6 +70,7 @@
             const label = filter === 'all' ? 'All' : filter === 'video' ? 'Videos' : filter === 'image' ? 'Images' : 'Other';
             button.textContent = `${label} (${count[filter]})`;
             button.classList.toggle('selected', filter === selectedFilter);
+            button.classList.toggle('hidden', count[filter] === 0);
             button.disabled = running || count[filter] === 0;
         });
         start.disabled = running || filesForSelection().length === 0;
@@ -72,6 +79,7 @@
         running = active;
         scan.disabled = active;
         stop.disabled = !active;
+        stop.classList.toggle('hidden', activity !== 'download');
         updateSelection();
     };
 
@@ -155,7 +163,7 @@
             container.dispatchEvent(new Event('scroll', { bubbles: true }));
             await sleep(550);
             captureMedia(found);
-            if (step && step % 10 === 0) setStatus(`Scanning Drive folder... ${found.size} media files found`);
+            if (step && step % 10 === 0) setStatus(`Scanning Drive folder... ${found.size} files found`);
             const atBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 5;
             stableAtBottom = atBottom ? (found.size === lastCount ? stableAtBottom + 1 : 0) : 0;
             if (stableAtBottom >= 4) break;
@@ -168,11 +176,13 @@
 
     scan.addEventListener('click', async () => {
         if (running) return;
-        activity = 'scan'; stopRequested = false; setControls(true); setStatus('Scanning this Drive folder...');
+        activity = 'scan'; stopRequested = false; setResultsVisible(false); setControls(true); setStatus('Scanning this Drive folder...');
         scannedFiles = await scanFolder();
-        activity = null; setControls(false);
+        activity = null; selectedFilter = 'all'; setControls(false);
         if (stopRequested) { setStatus('Scan stopped. Click Scan folder to try again.'); return; }
         if (!scannedFiles.length) { setStatus('No supported files found. Wait for the folder to finish loading, then scan again.'); return; }
+        setResultsVisible(true);
+        updateSelection();
         const count = counts();
         setStatus(`Scan complete: ${count.video} videos, ${count.image} images, and ${count.other} other files found. Choose what to download.`);
     });
