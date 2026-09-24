@@ -38,14 +38,14 @@ jobs:
           mkdir -p dist
           (
             cd extension
-            zip -qr "../dist/AnyPNG-v${VERSION}.zip" .
+            zip -qr "../dist/RightMate-v${VERSION}.zip" .
           )
 
       - name: Upload extension ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: AnyPNG-v${{ steps.manifest.outputs.version }}
-          path: dist/AnyPNG-v${{ steps.manifest.outputs.version }}.zip
+          name: RightMate-v${{ steps.manifest.outputs.version }}
+          path: dist/RightMate-v${{ steps.manifest.outputs.version }}.zip
           if-no-files-found: error
 
       - name: Create GitHub release
@@ -53,7 +53,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.manifest.outputs.version }}
-          ZIP_PATH: dist/AnyPNG-v${{ steps.manifest.outputs.version }}.zip
+          ZIP_PATH: dist/RightMate-v${{ steps.manifest.outputs.version }}.zip
         run: |
           tag="v${VERSION}"
           if gh release view "$tag" >/dev/null 2>&1; then
@@ -61,6 +61,6 @@ jobs:
           else
             gh release create "$tag" "$ZIP_PATH" \
               --target "$GITHUB_SHA" \
-              --title "AnyPNG $tag" \
+              --title "RightMate $tag" \
               --generate-notes
           fi
