@@ -34,11 +34,14 @@ Extension: no build step. Load `extension/` directly via `chrome://extensions` �
 
 ## Backend architecture (`backend/`)
 
-Four files, all copied into the image by the Dockerfile:
+Five files, all copied into the image by the Dockerfile:
 - `main.py` — the FastAPI app: routes, auth dependencies, image work, YouTube.
 - `licensing.py` — key generation, entitlement tokens, and thin wrappers over the licensing Postgres functions.
 - `supabase_rest.py` — the shared PostgREST/Auth request helper and service-role headers. It exists so `main.py` and `licensing.py` can both reach Supabase without importing each other.
 - `admin.html` — the admin panel page (see *Licensing*).
+- `email-logo.png` — served at `GET /brand/logo.png` for the auth emails.
+
+Auth emails are OTP codes, not links: signup and password reset verify through `POST /auth/v1/verify` in `signup.js` / `forgot-password.js`. The Supabase templates live in `backend/email-templates/` and are pasted into the dashboard by hand. They must use `{{ .Token }}` and never `{{ .ConfirmationURL }}`, and their logo comes from the backend rather than Supabase Storage; both rules keep the Supabase project URL out of users' inboxes. SMTP is Hostinger (`noreply@oddbirds.dev`).
 
 Routes:
 - `GET /ping` — health check; returns `API_FEATURES`.

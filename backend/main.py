@@ -513,6 +513,18 @@ async def admin_page():
     return HTMLResponse(ADMIN_PAGE.read_text(encoding="utf-8"))
 
 
+EMAIL_LOGO = pathlib.Path(__file__).with_name("email-logo.png")
+
+
+@app.get("/brand/logo.png")
+async def email_logo():
+    """Public logo for the Supabase auth email templates, served from here so
+    the emails don't reference the Supabase project URL."""
+    if not EMAIL_LOGO.exists():
+        raise HTTPException(status_code=404, detail="Logo is not deployed.")
+    return FileResponse(EMAIL_LOGO, media_type="image/png", headers={"Cache-Control": "public, max-age=604800"})
+
+
 @app.get("/license/admin/licenses", dependencies=[Depends(verify_admin_token)])
 async def license_admin_list(q: str = "", limit: int = 50, offset: int = 0):
     try:

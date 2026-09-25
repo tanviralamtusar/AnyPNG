@@ -15,7 +15,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy your application code
-COPY main.py licensing.py supabase_rest.py admin.html .
+COPY main.py licensing.py supabase_rest.py admin.html email-logo.png .
 
 # Expose the port FastAPI will run on
 EXPOSE 8000
