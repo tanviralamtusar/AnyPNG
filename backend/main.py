@@ -495,6 +495,11 @@ class LicenseBanRequest(BaseModel):
     banned: bool = True
 
 
+class LicenseIssueRequest(BaseModel):
+    user_id: str
+    note: str | None = None
+
+
 ADMIN_PAGE = pathlib.Path(__file__).with_name("admin.html")
 
 
@@ -533,6 +538,18 @@ async def license_admin_users(q: str = "", limit: int = 50, offset: int = 0):
     except RuntimeError as exc:
         print(f"[license] admin users failed: {exc}")
         raise HTTPException(status_code=503, detail="Could not read accounts.") from exc
+
+
+@app.post("/license/admin/issue", dependencies=[Depends(verify_admin_token)])
+async def license_admin_issue(body: LicenseIssueRequest):
+    """Create a key that already belongs to one account."""
+    try:
+        return await asyncio.to_thread(licensing.admin_issue, body.user_id, body.note)
+    except licensing.LicenseError as exc:
+        raise _license_http_error(exc) from exc
+    except RuntimeError as exc:
+        print(f"[license] admin issue failed: {exc}")
+        raise HTTPException(status_code=503, detail="Could not issue a key.") from exc
 
 
 @app.post("/license/admin/revoke", dependencies=[Depends(verify_admin_token)])

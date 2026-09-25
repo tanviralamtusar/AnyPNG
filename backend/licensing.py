@@ -253,6 +253,42 @@ def admin_events(key: str, limit: int = 50) -> list:
     return result if isinstance(result, list) else []
 
 
+def admin_issue(user_id: str, note: str | None) -> dict:
+    """Mint a key already claimed by `user_id`.
+
+    The account owns it immediately, so nobody else can redeem it; the user
+    still enters it in the extension, which is what binds their device.
+    """
+    if not user_id:
+        raise LicenseError("bad_request", "No account was selected.", 400)
+
+    for _ in range(5):
+        try:
+            result = _unwrap(rpc("admin_issue_license", {
+                "p_user": user_id,
+                "p_key": generate_key(),
+                "p_note": note,
+            }))
+        except RuntimeError as exc:
+            if "duplicate key" in str(exc).lower():
+                continue          # 80-bit key collision; draw again
+            raise
+        status = result.get("status")
+        if status == "created":
+            return {"status": "created", "key": result["key"], "email": result.get("email")}
+        if status == "no_user":
+            raise LicenseError("not_found", "That account no longer exists.", 404)
+        if status == "already_licensed":
+            raise LicenseError(
+                "already_licensed",
+                f"That account already holds {result.get('key')}. Revoke it first to issue a new one.",
+                409,
+                {"key": result.get("key")},
+            )
+        raise RuntimeError(f"Unexpected issue status: {status}")
+    raise RuntimeError("Could not allocate a unique license key")
+
+
 def admin_revoke(key: str, note: str | None) -> dict:
     result = _unwrap(rpc("admin_revoke_license", {"p_key": key, "p_note": note}))
     if result.get("status") == "not_found":

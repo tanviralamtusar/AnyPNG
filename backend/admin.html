@@ -260,7 +260,9 @@ function userRowHtml(row) {
     + '<td class="nowrap muted">' + fmtDate(row.created_at) + '</td>'
     + '<td class="nowrap muted">' + fmtDate(row.last_sign_in_at) + '</td>'
     + '<td class="nowrap">'
-      + (row.license_key ? '<button class="small" data-act="find-key">View license</button> ' : '')
+      + (row.license_key
+          ? '<button class="small" data-act="find-key">View license</button> '
+          : '<button class="small primary" data-act="issue">Issue license</button> ')
       + '<button class="small" data-act="ban">' + (row.banned ? 'Unban' : 'Ban') + '</button>'
     + '</td>'
     + '</tr>';
@@ -420,6 +422,12 @@ $('user-rows').addEventListener('click', async (event) => {
 
   button.disabled = true;
   try {
+    if (act === 'issue') {
+      const data = await api('/license/admin/issue', { method: 'POST', body: JSON.stringify({ user_id: userId }) });
+      flash('Issued ' + data.key + ' to ' + data.email + ' — send them the key; they activate it in the extension.', true);
+      load();
+      return;
+    }
     const banning = button.textContent.trim() === 'Ban';
     await api('/license/admin/ban', { method: 'POST', body: JSON.stringify({ user_id: userId, banned: banning }) });
     flash(banning ? 'Account banned from signing in.' : 'Account unbanned.', true);
