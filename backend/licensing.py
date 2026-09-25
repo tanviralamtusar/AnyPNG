@@ -239,20 +239,13 @@ def admin_list(query: str | None, limit: int, offset: int) -> dict:
 
 
 def admin_users(query: str | None, limit: int, offset: int) -> dict:
-    """Accounts, with the profile credits and whatever license each one holds."""
+    """Accounts, with the profile name and whatever license each one holds."""
     result = _unwrap(rpc("admin_list_users", {
         "p_query": (query or "").strip() or None,
         "p_limit": max(1, min(int(limit or 50), 200)),
         "p_offset": max(0, int(offset or 0)),
     }))
     return {"total": result.get("total", 0), "rows": result.get("rows", [])}
-
-
-def admin_set_credits(user_id: str, credits: int) -> dict:
-    result = _unwrap(rpc("admin_set_credits", {"p_user": user_id, "p_credits": int(credits)}))
-    if result.get("status") == "not_found":
-        raise LicenseError("not_found", "No profile exists for that account.", 404)
-    return {"status": "ok", "credits": result.get("credits")}
 
 
 def admin_events(key: str, limit: int = 50) -> list:
