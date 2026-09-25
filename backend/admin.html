@@ -64,6 +64,10 @@
   details.events summary { cursor: pointer; color: var(--muted); font-size: 12px; }
   details.events table { margin-top: 6px; font-size: 12px; }
   .table-scroll { overflow-x: auto; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+  .tabs button { background: transparent; border-color: transparent; color: var(--muted); }
+  .tabs button[aria-selected="true"] { background: var(--surface); border-color: var(--border); color: var(--text); }
+  input.credits { width: 76px; padding: 5px 7px; font-size: 12px; }
   @media (max-width: 720px) { body { padding: 12px 8px; } th, td { padding: 7px 6px; font-size: 13px; } }
 </style>
 </head>
@@ -90,7 +94,12 @@
 
     <div id="msg" class="msg"></div>
 
-    <div class="card">
+    <div class="tabs" role="tablist">
+      <button id="tab-licenses" role="tab" aria-selected="true">Licenses</button>
+      <button id="tab-users" role="tab" aria-selected="false">Users</button>
+    </div>
+
+    <div class="card" data-view="licenses">
       <div class="row">
         <strong style="width:100%">Create keys</strong>
         <input type="number" id="mint-count" value="1" min="1" max="100" style="width:90px" title="How many keys">
@@ -103,14 +112,14 @@
 
     <div class="card">
       <div class="row">
-        <input type="search" id="q" placeholder="Search key, email, order or device…">
+        <input type="search" id="q" placeholder="Search…">
         <button id="search">Search</button>
         <button id="refresh">Refresh</button>
       </div>
     </div>
 
     <div class="card table-scroll">
-      <table>
+      <table data-view="licenses">
         <thead>
           <tr>
             <th>Key</th><th>Status</th><th>Account</th><th>Device</th>
@@ -119,6 +128,17 @@
         </thead>
         <tbody id="rows"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
       </table>
+
+      <table data-view="users" class="hidden">
+        <thead>
+          <tr>
+            <th>Account</th><th>License</th><th>Credits</th>
+            <th class="nowrap">Signed up</th><th class="nowrap">Last sign-in</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="user-rows"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+      </table>
+
       <div class="row" style="margin-top:12px">
         <button id="prev" class="small">Previous</button>
         <button id="next" class="small">Next</button>
@@ -134,6 +154,7 @@ const $ = (id) => document.getElementById(id);
 let token = sessionStorage.getItem('rmAdminToken') || '';
 let offset = 0;
 let total = 0;
+let view = 'licenses';   // 'licenses' | 'users'
 
 function flash(text, ok) {
   const el = $('msg');
@@ -168,7 +189,7 @@ function unlock() {
   sessionStorage.setItem('rmAdminToken', token);
   $('gate').classList.add('hidden');
   $('app').classList.remove('hidden');
-  load();
+  setView('licenses');
 }
 
 function lock() {
@@ -206,6 +227,48 @@ function escapeHtml(value) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+function setView(next) {
+  view = next;
+  offset = 0;
+  $('tab-licenses').setAttribute('aria-selected', String(view === 'licenses'));
+  $('tab-users').setAttribute('aria-selected', String(view === 'users'));
+  document.querySelectorAll('[data-view]').forEach((el) => {
+    el.classList.toggle('hidden', el.dataset.view !== view);
+  });
+  $('q').value = '';
+  $('q').placeholder = view === 'licenses'
+    ? 'Search key, email, order or device…'
+    : 'Search email, name or key…';
+  load();
+}
+
+$('tab-licenses').onclick = () => setView('licenses');
+$('tab-users').onclick = () => setView('users');
+
+function userRowHtml(row) {
+  const license = row.license_key
+    ? '<code>' + escapeHtml(row.license_key) + '</code>'
+      + ' <span class="pill ' + escapeHtml(row.license_status) + '">' + escapeHtml(row.license_status) + '</span>'
+      + (row.license_device ? '<div class="muted" style="font-size:12px">' + escapeHtml(row.license_device) + '</div>' : '')
+    : '<span class="muted">none</span>';
+  const name = row.full_name ? '<div class="muted" style="font-size:12px">' + escapeHtml(row.full_name) + '</div>' : '';
+  const unconfirmed = row.email_confirmed_at ? '' : ' <span class="pill unused">unconfirmed</span>';
+
+  return '<tr data-user="' + escapeHtml(row.id) + '">'
+    + '<td>' + escapeHtml(row.email || '—') + unconfirmed
+      + (row.banned ? ' <span class="pill banned">banned</span>' : '') + name + '</td>'
+    + '<td>' + license + '</td>'
+    + '<td class="nowrap"><input class="credits" type="number" min="0" value="' + Number(row.credits || 0) + '">'
+      + ' <button class="small" data-act="credits">Save</button></td>'
+    + '<td class="nowrap muted">' + fmtDate(row.created_at) + '</td>'
+    + '<td class="nowrap muted">' + fmtDate(row.last_sign_in_at) + '</td>'
+    + '<td class="nowrap">'
+      + (row.license_key ? '<button class="small" data-act="find-key">View license</button> ' : '')
+      + '<button class="small" data-act="ban">' + (row.banned ? 'Unban' : 'Ban') + '</button>'
+    + '</td>'
+    + '</tr>';
+}
+
 function rowHtml(row) {
   const account = row.account_email || row.buyer_email || '';
   const device = row.device_label
@@ -234,21 +297,25 @@ function rowHtml(row) {
 }
 
 async function load() {
+  const users = view === 'users';
+  const body = $(users ? 'user-rows' : 'rows');
   const q = encodeURIComponent($('q').value.trim());
-  $('rows').innerHTML = '<tr><td colspan="6" class="muted">Loading…</td></tr>';
+  body.innerHTML = '<tr><td colspan="6" class="muted">Loading…</td></tr>';
   try {
-    const data = await api('/license/admin/licenses?q=' + q + '&limit=' + PAGE_SIZE + '&offset=' + offset);
+    const path = users ? '/license/admin/users' : '/license/admin/licenses';
+    const data = await api(path + '?q=' + q + '&limit=' + PAGE_SIZE + '&offset=' + offset);
     total = data.total || 0;
-    $('count').textContent = total + ' license' + (total === 1 ? '' : 's');
-    $('rows').innerHTML = data.rows.length
-      ? data.rows.map(rowHtml).join('')
-      : '<tr><td colspan="6" class="muted">No licenses match.</td></tr>';
+    const noun = users ? 'account' : 'license';
+    $('count').textContent = total + ' ' + noun + (total === 1 ? '' : 's');
+    body.innerHTML = data.rows.length
+      ? data.rows.map(users ? userRowHtml : rowHtml).join('')
+      : '<tr><td colspan="6" class="muted">Nothing matches.</td></tr>';
     const from = total ? offset + 1 : 0;
     $('page-info').textContent = from + '–' + Math.min(offset + PAGE_SIZE, total) + ' of ' + total;
     $('prev').disabled = offset === 0;
     $('next').disabled = offset + PAGE_SIZE >= total;
   } catch (error) {
-    $('rows').innerHTML = '<tr><td colspan="6" class="muted">' + escapeHtml(error.message) + '</td></tr>';
+    body.innerHTML = '<tr><td colspan="6" class="muted">' + escapeHtml(error.message) + '</td></tr>';
   }
 }
 
@@ -330,6 +397,43 @@ $('rows').addEventListener('click', async (event) => {
       await api('/license/admin/ban', { method: 'POST', body: JSON.stringify({ user_id: tr.dataset.user, banned: banning }) });
       flash(banning ? 'Account banned from signing in.' : 'Account unbanned.', true);
     }
+    load();
+  } catch (error) {
+    flash(error.message, false);
+    button.disabled = false;
+  }
+});
+
+$('user-rows').addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-act]');
+  if (!button) return;
+  const tr = button.closest('tr');
+  const userId = tr.dataset.user;
+  const act = button.dataset.act;
+
+  if (act === 'find-key') {
+    const key = tr.querySelector('code').textContent;
+    setView('licenses');
+    $('q').value = key;
+    $('search').click();
+    return;
+  }
+  if (act === 'ban' && !confirm(button.textContent.trim() + ' ' + tr.querySelector('td').textContent.trim() + '?')) return;
+
+  button.disabled = true;
+  try {
+    if (act === 'credits') {
+      const data = await api('/license/admin/credits', {
+        method: 'POST',
+        body: JSON.stringify({ user_id: userId, credits: Number(tr.querySelector('.credits').value) || 0 }),
+      });
+      flash('Credits set to ' + data.credits + '.', true);
+      button.disabled = false;
+      return;   // no reload: it would discard other rows being edited
+    }
+    const banning = button.textContent.trim() === 'Ban';
+    await api('/license/admin/ban', { method: 'POST', body: JSON.stringify({ user_id: userId, banned: banning }) });
+    flash(banning ? 'Account banned from signing in.' : 'Account unbanned.', true);
     load();
   } catch (error) {
     flash(error.message, false);

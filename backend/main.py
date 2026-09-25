@@ -495,6 +495,11 @@ class LicenseBanRequest(BaseModel):
     banned: bool = True
 
 
+class LicenseCreditsRequest(BaseModel):
+    user_id: str
+    credits: int
+
+
 ADMIN_PAGE = pathlib.Path(__file__).with_name("admin.html")
 
 
@@ -524,6 +529,26 @@ async def license_admin_events(key: str, limit: int = 50):
     except RuntimeError as exc:
         print(f"[license] admin events failed: {exc}")
         raise HTTPException(status_code=503, detail="Could not read the license history.") from exc
+
+
+@app.get("/license/admin/users", dependencies=[Depends(verify_admin_token)])
+async def license_admin_users(q: str = "", limit: int = 50, offset: int = 0):
+    try:
+        return await asyncio.to_thread(licensing.admin_users, q, limit, offset)
+    except RuntimeError as exc:
+        print(f"[license] admin users failed: {exc}")
+        raise HTTPException(status_code=503, detail="Could not read accounts.") from exc
+
+
+@app.post("/license/admin/credits", dependencies=[Depends(verify_admin_token)])
+async def license_admin_credits(body: LicenseCreditsRequest):
+    try:
+        return await asyncio.to_thread(licensing.admin_set_credits, body.user_id, body.credits)
+    except licensing.LicenseError as exc:
+        raise _license_http_error(exc) from exc
+    except RuntimeError as exc:
+        print(f"[license] admin credits failed: {exc}")
+        raise HTTPException(status_code=503, detail="Could not change that balance.") from exc
 
 
 @app.post("/license/admin/revoke", dependencies=[Depends(verify_admin_token)])
