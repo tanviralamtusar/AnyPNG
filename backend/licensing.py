@@ -20,7 +20,7 @@ import re
 import secrets
 import time
 
-from supabase_rest import rpc
+from supabase_rest import SUPABASE_URL, json_request, rpc, service_headers
 
 # Crockford base32 without I, L, O and U: no character pair a user can confuse
 # when copying a key out of a receipt email by hand.
@@ -220,3 +220,62 @@ def mint(provider: str | None, order_id: str | None, email: str | None) -> dict:
         if result.get("key"):
             return {"key": result["key"], "status": result.get("status")}
     raise RuntimeError("Could not allocate a unique license key")
+
+
+# --- admin operations -------------------------------------------------------
+#
+# Reached only through the SECRET_TOKEN-gated endpoints in main.py. Each one is
+# a thin wrapper over a SECURITY DEFINER function so the audit trail in
+# license_events is written in the same transaction as the change.
+
+
+def admin_list(query: str | None, limit: int, offset: int) -> dict:
+    result = _unwrap(rpc("admin_list_licenses", {
+        "p_query": (query or "").strip() or None,
+        "p_limit": max(1, min(int(limit or 50), 200)),
+        "p_offset": max(0, int(offset or 0)),
+    }))
+    return {"total": result.get("total", 0), "rows": result.get("rows", [])}
+
+
+def admin_events(key: str, limit: int = 50) -> list:
+    result = rpc("admin_license_events", {"p_key": key, "p_limit": max(1, min(int(limit or 50), 200))})
+    return result if isinstance(result, list) else []
+
+
+def admin_revoke(key: str, note: str | None) -> dict:
+    result = _unwrap(rpc("admin_revoke_license", {"p_key": key, "p_note": note}))
+    if result.get("status") == "not_found":
+        raise LicenseError("not_found", "No license with that key.", 404)
+    return {"status": "revoked", "key": result.get("key")}
+
+
+def admin_release(key: str, note: str | None) -> dict:
+    """Unbind the device and clear the cooldown, so the user can activate now."""
+    result = _unwrap(rpc("admin_release_license", {"p_key": key, "p_note": note}))
+    status = result.get("status")
+    if status == "not_found":
+        raise LicenseError("not_found", "No license with that key.", 404)
+    if status == "revoked":
+        raise LicenseError("revoked", "That key is revoked; releasing it would change nothing.", 409)
+    return {"status": "released", "license": result.get("license")}
+
+
+# Banning is Supabase Auth, not the license tables: it blocks sign-in entirely
+# rather than just this product's entitlement.
+BAN_FOREVER = "876000h"  # 100 years; Supabase has no "permanent" literal.
+
+
+def admin_set_ban(user_id: str, banned: bool) -> dict:
+    if not SUPABASE_URL:
+        raise RuntimeError("SUPABASE_URL is not configured on the API")
+    if not user_id:
+        raise LicenseError("not_found", "That license is not claimed by an account yet.", 404)
+    data = json_request(
+        f"{SUPABASE_URL}/auth/v1/admin/users/{user_id}",
+        "PUT",
+        service_headers(),
+        {"ban_duration": BAN_FOREVER if banned else "none"},
+    )
+    until = data.get("banned_until") if isinstance(data, dict) else None
+    return {"status": "ok", "user_id": user_id, "banned": bool(banned), "banned_until": until}

@@ -1,4 +1,5 @@
 import os
+import pathlib
 import re
 import asyncio
 import base64
@@ -22,7 +23,7 @@ from google.genai import types
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, UploadFile, Depends, Header, HTTPException, Form, Request, WebSocket, WebSocketDisconnect
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import Response, FileResponse
+from fastapi.responses import Response, FileResponse, HTMLResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 from PIL import Image
@@ -482,6 +483,83 @@ async def license_deactivate(body: LicenseDeviceRequest, user_id: str = Depends(
     except RuntimeError as exc:
         print(f"[license] deactivation failed: {exc}")
         raise HTTPException(status_code=503, detail="Deactivation is temporarily unavailable.") from exc
+
+
+class LicenseKeyRequest(BaseModel):
+    key: str
+    note: str | None = None
+
+
+class LicenseBanRequest(BaseModel):
+    user_id: str
+    banned: bool = True
+
+
+ADMIN_PAGE = pathlib.Path(__file__).with_name("admin.html")
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page():
+    """The panel itself is public HTML; every action it performs needs the
+    admin bearer token, which the operator pastes in and the page keeps only in
+    sessionStorage."""
+    if not ADMIN_PAGE.exists():
+        raise HTTPException(status_code=404, detail="Admin page is not deployed.")
+    return HTMLResponse(ADMIN_PAGE.read_text(encoding="utf-8"))
+
+
+@app.get("/license/admin/licenses", dependencies=[Depends(verify_admin_token)])
+async def license_admin_list(q: str = "", limit: int = 50, offset: int = 0):
+    try:
+        return await asyncio.to_thread(licensing.admin_list, q, limit, offset)
+    except RuntimeError as exc:
+        print(f"[license] admin list failed: {exc}")
+        raise HTTPException(status_code=503, detail="Could not read licenses.") from exc
+
+
+@app.get("/license/admin/events", dependencies=[Depends(verify_admin_token)])
+async def license_admin_events(key: str, limit: int = 50):
+    try:
+        return {"events": await asyncio.to_thread(licensing.admin_events, key, limit)}
+    except RuntimeError as exc:
+        print(f"[license] admin events failed: {exc}")
+        raise HTTPException(status_code=503, detail="Could not read the license history.") from exc
+
+
+@app.post("/license/admin/revoke", dependencies=[Depends(verify_admin_token)])
+async def license_admin_revoke(body: LicenseKeyRequest):
+    """Permanently disable a key. There is no un-revoke here on purpose."""
+    try:
+        return await asyncio.to_thread(licensing.admin_revoke, body.key, body.note)
+    except licensing.LicenseError as exc:
+        raise _license_http_error(exc) from exc
+    except RuntimeError as exc:
+        print(f"[license] admin revoke failed: {exc}")
+        raise HTTPException(status_code=503, detail="Could not revoke that key.") from exc
+
+
+@app.post("/license/admin/release", dependencies=[Depends(verify_admin_token)])
+async def license_admin_release(body: LicenseKeyRequest):
+    """Unbind the device and clear the cooldown so the user can activate now."""
+    try:
+        return await asyncio.to_thread(licensing.admin_release, body.key, body.note)
+    except licensing.LicenseError as exc:
+        raise _license_http_error(exc) from exc
+    except RuntimeError as exc:
+        print(f"[license] admin release failed: {exc}")
+        raise HTTPException(status_code=503, detail="Could not release that device.") from exc
+
+
+@app.post("/license/admin/ban", dependencies=[Depends(verify_admin_token)])
+async def license_admin_ban(body: LicenseBanRequest):
+    """Block the Supabase account from signing in at all, or lift that block."""
+    try:
+        return await asyncio.to_thread(licensing.admin_set_ban, body.user_id, body.banned)
+    except licensing.LicenseError as exc:
+        raise _license_http_error(exc) from exc
+    except RuntimeError as exc:
+        print(f"[license] admin ban failed: {exc}")
+        raise HTTPException(status_code=503, detail="Could not change that account.") from exc
 
 
 @app.post("/license/admin/mint", dependencies=[Depends(verify_admin_token)])
