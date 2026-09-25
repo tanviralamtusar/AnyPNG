@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import io
 import json
 import secrets
 import shutil
@@ -19,7 +20,7 @@ from typing import Literal
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, UploadFile, Depends, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, Depends, HTTPException, Form, WebSocket, WebSocketDisconnect
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import Response, FileResponse
 from pydantic import BaseModel
@@ -35,8 +36,11 @@ except ImportError:  # Keep the API bootable until image dependencies are instal
 try:
     import yt_dlp
     from yt_dlp.utils import DownloadCancelled
-except ImportError:  # Keep the API bootable without yt-dlp; /youtube/jobs returns 503.
+    from yt_dlp.networking.common import RequestHandler, Response as YdlResponse
+    from yt_dlp.networking.exceptions import HTTPError as YdlHTTPError, TransportError as YdlTransportError
+except ImportError:  # Keep the API bootable without yt-dlp; YouTube endpoints return 503.
     yt_dlp = None
+    RequestHandler = object
 
     class DownloadCancelled(Exception):
         pass
@@ -292,7 +296,7 @@ def run_gemini_image_edit(contents: bytes, mime_type: str, prompt: str, model: s
 
 # Bumped when the client-visible contract changes, so /ping can confirm what is
 # actually deployed instead of inferring it from download behaviour.
-API_FEATURES = ["cookie_auth", "local_inpaint_credits", "youtube_download"]
+API_FEATURES = ["cookie_auth", "local_inpaint_credits", "youtube_download", "youtube_relay"]
 
 _background_session = None
 
@@ -518,9 +522,24 @@ def _ytdlp_format_opts(kind: str, height: int | None) -> dict:
         }
     # format_sort picks the closest quality at or below the cap instead of failing
     # when the exact height doesn't exist for this video.
-    ext_pref = "ext:mp4:m4a" if kind == "mp4" else "ext:webm:webm"
-    sort = [f"res:{height}", ext_pref] if height else [ext_pref]
-    return {"format": "bv*+ba/b", "format_sort": sort, "merge_output_format": kind}
+    return {"format": "bv*+ba/b", "format_sort": _video_format_sort(kind, height), "merge_output_format": kind}
+
+
+def _video_format_sort(kind: str, height: int | None) -> list[str]:
+    # For MP4, prefer H.264 at the chosen height (widest player support); YouTube only
+    # offers VP9/AV1 above 1080p, and res comes first so those still win there.
+    prefs = ["vcodec:h264", "ext:mp4:m4a"] if kind == "mp4" else ["ext:webm:webm"]
+    return [f"res:{height}", *prefs] if height else prefs
+
+
+def _live_match_filter(skip_reason: list[str]):
+    """yt-dlp match_filter that skips live streams and records why."""
+    def match_filter(info: dict, *, incomplete: bool = False) -> str | None:
+        if info.get("is_live") or info.get("live_status") in ("is_live", "is_upcoming", "post_live"):
+            skip_reason.append("Live streams and premieres can't be downloaded.")
+            return skip_reason[-1]
+        return None
+    return match_filter
 
 
 def _log_available_formats(job: YoutubeJob) -> None:
@@ -567,19 +586,13 @@ def _run_youtube_download(job: YoutubeJob) -> None:
             job.status = "processing"
             job.percent = 100.0
 
-    def match_filter(info: dict, *, incomplete: bool = False) -> str | None:
-        if info.get("is_live") or info.get("live_status") in ("is_live", "is_upcoming", "post_live"):
-            skip_reason.append("Live streams and premieres can't be downloaded.")
-            return skip_reason[-1]
-        return None
-
     opts = _ytdlp_base_opts(job)
     opts.update(_ytdlp_format_opts(job.kind, job.height))
     opts.update({
         "outtmpl": "%(title).150B [%(id)s].%(ext)s",
         "progress_hooks": [progress_hook],
         "postprocessor_hooks": [postprocessor_hook],
-        "match_filter": match_filter,
+        "match_filter": _live_match_filter(skip_reason),
     })
 
     with yt_dlp.YoutubeDL(opts) as ydl:
@@ -664,9 +677,8 @@ def _check_file_token(job_id: str, token: str) -> bool:
     return hmac.compare_digest(expected, sig)
 
 
-async def verify_signed_in_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
-    """Require a Supabase user session. Cached briefly because clients poll job status."""
-    token = credentials.credentials
+async def _user_id_for_token(token: str) -> str | None:
+    """Supabase user id for an access token, or None. Cached briefly because clients poll."""
     key = hashlib.sha256(token.encode()).hexdigest()
     cached = _yt_auth_cache.get(key)
     now = time.time()
@@ -674,14 +686,19 @@ async def verify_signed_in_user(credentials: HTTPAuthorizationCredentials = Depe
         return cached[0]
     try:
         user_id = await asyncio.to_thread(_verify_supabase_user, token)
-    except ValueError as exc:
-        raise HTTPException(status_code=401, detail="Please sign in again.") from exc
-    except RuntimeError as exc:
+    except (ValueError, RuntimeError) as exc:
         print(f"[youtube] auth check failed: {exc}")
-        raise HTTPException(status_code=401, detail="Please sign in again.") from exc
+        return None
     if len(_yt_auth_cache) > 5000:
         _yt_auth_cache.clear()
     _yt_auth_cache[key] = (user_id, now + YT_AUTH_CACHE_SECONDS)
+    return user_id
+
+
+async def verify_signed_in_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
+    user_id = await _user_id_for_token(credentials.credentials)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Please sign in again.")
     return user_id
 
 
@@ -786,3 +803,323 @@ async def get_youtube_file(job_id: str, t: str = ""):
         filename=job.filename,
         background=BackgroundTask(_remove_youtube_job, job_id),
     )
+
+
+# 🔁 YOUTUBE BROWSER RELAY
+#
+# yt-dlp runs here, but every HTTP request it makes is sent over a WebSocket to the
+# user's extension, which performs it from the user's own IP. YouTube therefore never
+# sees this server (no bot check), and the stream URLs it returns are locked to the
+# user's IP, so the extension downloads the media directly. Only small metadata
+# responses (a few hundred KB) pass through this server; no media, no files.
+
+YT_RELAY_MAX_REQUESTS = 30
+YT_RELAY_MAX_BODY = 8 * 1024 * 1024
+YT_RELAY_FETCH_TIMEOUT = 45
+YT_RELAY_SESSION_TIMEOUT = 120
+YT_RELAY_MAX_PER_USER = 2
+YT_RELAY_MAX_CONCURRENT = max(1, int(os.getenv("YT_RELAY_MAX_CONCURRENT", "8")))
+# Must match the extension's allowlist in scripts/yt-relay.js.
+YT_RELAY_ALLOWED_HOSTS = ("youtube.com", "youtu.be", "googlevideo.com", "youtubei.googleapis.com", "ytimg.com")
+# Headers a browser won't let the extension set; the browser supplies its own.
+_RELAY_DROP_REQUEST_HEADERS = {
+    "cookie", "host", "connection", "content-length", "accept-encoding", "origin", "referer",
+    "user-agent", "te", "keep-alive", "transfer-encoding", "upgrade", "via", "expect", "trailer",
+}
+# fetch() has already decoded the body, so these would make yt-dlp misread it.
+_RELAY_DROP_RESPONSE_HEADERS = {"content-encoding", "content-length", "transfer-encoding"}
+
+_yt_relay_active: dict[str, int] = {}
+_yt_relay_semaphore: asyncio.Semaphore | None = None
+
+
+class RelayExtractError(Exception):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def _is_relay_host(url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    return parsed.scheme == "https" and any(host == h or host.endswith("." + h) for h in YT_RELAY_ALLOWED_HOSTS)
+
+
+class YoutubeRelaySession:
+    """One extension WebSocket; turns yt-dlp requests into browser fetches."""
+
+    def __init__(self, ws: WebSocket, loop: asyncio.AbstractEventLoop):
+        self.ws = ws
+        self.loop = loop
+        self.pending: dict[str, asyncio.Future] = {}
+        self.requests = 0
+        self.closed = False
+        self._send_lock = asyncio.Lock()
+
+    async def send(self, message: dict) -> None:
+        async with self._send_lock:
+            await self.ws.send_json(message)
+
+    async def fetch(self, message: dict) -> dict:
+        fetch_id = uuid.uuid4().hex
+        future = self.loop.create_future()
+        self.pending[fetch_id] = future
+        try:
+            await self.send({"type": "fetch", "id": fetch_id, **message})
+            return await asyncio.wait_for(future, YT_RELAY_FETCH_TIMEOUT)
+        finally:
+            self.pending.pop(fetch_id, None)
+
+    def resolve(self, message: dict) -> None:
+        future = self.pending.get(message.get("id"))
+        if future and not future.done():
+            future.set_result(message)
+
+    def close(self) -> None:
+        self.closed = True
+        for future in self.pending.values():
+            if not future.done():
+                future.set_exception(ConnectionError("The browser disconnected."))
+
+
+class BrowserRelayRH(RequestHandler):
+    """yt-dlp request handler that performs every request through a YoutubeRelaySession."""
+
+    _SUPPORTED_URL_SCHEMES = ("https",)
+    _SUPPORTED_PROXY_SCHEMES = None
+    _SUPPORTED_FEATURES = None
+    session: "YoutubeRelaySession | None" = None
+
+    def _check_extensions(self, extensions):
+        super()._check_extensions(extensions)
+        # The browser decides timeouts, TLS and cookies, so these are accepted and ignored.
+        for key in ("cookiejar", "timeout", "legacy_ssl", "keep_header_casing", "impersonate"):
+            extensions.pop(key, None)
+
+    def _send(self, request):
+        session = self.session
+        if session is None or session.closed:
+            raise YdlTransportError("The browser relay is closed.")
+        if not _is_relay_host(request.url):
+            raise YdlTransportError(f"Refusing to relay a request to {urllib.parse.urlparse(request.url).hostname}")
+        session.requests += 1
+        if session.requests > YT_RELAY_MAX_REQUESTS:
+            raise YdlTransportError("Too many relayed requests for one video.")
+
+        data = request.data
+        if data is not None and not isinstance(data, bytes):
+            data = data.read() if hasattr(data, "read") else bytes(data)
+        headers = {
+            name: value for name, value in self._get_headers(request).items()
+            if name.lower() not in _RELAY_DROP_REQUEST_HEADERS and not name.lower().startswith(("sec-", "proxy-"))
+        }
+        message = {
+            "method": request.method,
+            "url": request.url,
+            "headers": headers,
+            "body": base64.b64encode(data).decode() if data else None,
+        }
+
+        future = asyncio.run_coroutine_threadsafe(session.fetch(message), session.loop)
+        try:
+            result = future.result(timeout=YT_RELAY_FETCH_TIMEOUT + 5)
+        except Exception as e:
+            future.cancel()
+            raise YdlTransportError(f"Browser fetch failed: {e}", cause=e) from e
+        if not result.get("ok"):
+            raise YdlTransportError(f"Browser fetch failed: {result.get('error') or 'unknown error'}")
+
+        body = base64.b64decode(result.get("body") or "")
+        if len(body) > YT_RELAY_MAX_BODY:
+            raise YdlTransportError("Relayed response is too large.")
+        response_headers = {
+            name: value for name, value in (result.get("headers") or {}).items()
+            if name.lower() not in _RELAY_DROP_RESPONSE_HEADERS
+        }
+        response = YdlResponse(
+            io.BytesIO(body), url=result.get("url") or request.url,
+            headers=response_headers, status=int(result.get("status") or 0),
+        )
+        if not 200 <= response.status < 300:
+            raise YdlHTTPError(response)
+        return response
+
+
+def _relay_format_opts(kind: str, height: int | None) -> dict:
+    # Only plain HTTPS formats: the extension downloads them with ranged fetches.
+    if kind == "mp3":
+        return {"format": "ba[protocol=https]/b[protocol=https]"}
+    if kind == "webm":
+        # WebM can only hold VP8/VP9/AV1 + Opus/Vorbis, so prefer WebM streams outright.
+        fmt = ("bv*[ext=webm][protocol=https]+ba[ext=webm][protocol=https]"
+               "/bv*[protocol=https]+ba[protocol=https]/b[protocol=https]")
+    else:
+        fmt = "bv*[protocol=https]+ba[protocol=https]/b[protocol=https]"
+    return {"format": fmt, "format_sort": _video_format_sort(kind, height)}
+
+
+def _relay_extract(session: YoutubeRelaySession, url: str, kind: str, height: int | None) -> dict:
+    """Blocking; runs in a worker thread. Returns the stream URLs for the extension."""
+    session_handler = type("SessionRelayRH", (BrowserRelayRH,), {"session": session})
+
+    class RelayYDL(yt_dlp.YoutubeDL):
+        def build_request_director(self, handlers, preferences=None):
+            return super().build_request_director([session_handler], preferences)
+
+    skip_reason: list[str] = []
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "skip_download": True,
+        "match_filter": _live_match_filter(skip_reason),
+        **_relay_format_opts(kind, height),
+    }
+    if YTDLP_PLAYER_CLIENTS:
+        clients = [c.strip() for c in YTDLP_PLAYER_CLIENTS.split(",") if c.strip()]
+        if clients:
+            opts["extractor_args"] = {"youtube": {"player_client": clients}}
+
+    with RelayYDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False) or {}
+    if skip_reason:
+        raise RelayExtractError("live", skip_reason[0])
+
+    formats = info.get("requested_formats") or ([info] if info.get("url") else [])
+    if not formats:
+        raise RelayExtractError("no_formats", "No downloadable format was available for this video.")
+    streams = []
+    for f in formats:
+        streams.append({
+            "url": f["url"],
+            "format_id": f.get("format_id"),
+            "ext": f.get("ext"),
+            "vcodec": f.get("vcodec"),
+            "acodec": f.get("acodec"),
+            "height": f.get("height"),
+            "filesize": f.get("filesize") or f.get("filesize_approx"),
+            "chunk_size": (f.get("downloader_options") or {}).get("http_chunk_size"),
+        })
+    return {
+        "title": info.get("title") or info.get("id") or "YouTube video",
+        "video_id": info.get("id"),
+        "duration": info.get("duration"),
+        "kind": kind,
+        "streams": streams,
+    }
+
+
+async def _relay_reader(ws: WebSocket, session: YoutubeRelaySession) -> None:
+    try:
+        while True:
+            message = await ws.receive_json()
+            if message.get("type") == "fetch_result":
+                session.resolve(message)
+            elif message.get("type") == "cancel":
+                break
+    except Exception:
+        pass
+    finally:
+        session.close()
+
+
+def _relay_error_for(exc: Exception) -> tuple[str, str]:
+    message = str(exc)
+    if isinstance(exc, RelayExtractError):
+        return exc.code, exc.message
+    if _is_auth_wall(message):
+        return "auth_required", "YouTube requires sign-in for this video (private, members-only or age-restricted)."
+    if _is_format_error(message):
+        return "no_formats", "No downloadable format was available for this video."
+    return "failed", "Could not read this video's download links."
+
+
+@app.websocket("/youtube/extract")
+async def youtube_extract(ws: WebSocket):
+    """Relay protocol:
+    client → {type:"start", token, url, kind, height}
+    server → {type:"fetch", id, method, url, headers, body}   (repeated)
+    client → {type:"fetch_result", id, ok, status, url, headers, body | error}
+    server → {type:"result", title, video_id, duration, kind, streams} | {type:"error", code, message}
+    """
+    global _yt_relay_semaphore
+    await ws.accept()
+    session = YoutubeRelaySession(ws, asyncio.get_running_loop())
+    reader: asyncio.Task | None = None
+    user_id: str | None = None
+
+    async def fail(code: str, message: str) -> None:
+        try:
+            await session.send({"type": "error", "code": code, "message": message})
+        except Exception:
+            pass
+
+    try:
+        try:
+            start = await asyncio.wait_for(ws.receive_json(), 15)
+        except Exception:
+            return await fail("bad_request", "Expected a start message.")
+        if yt_dlp is None:
+            return await fail("unavailable", "Video downloads are not available on this server.")
+        if not isinstance(start, dict) or start.get("type") != "start":
+            return await fail("bad_request", "Expected a start message.")
+
+        user_id = await _user_id_for_token(str(start.get("token") or ""))
+        if not user_id:
+            return await fail("signin", "Please sign in again.")
+        url = str(start.get("url") or "").strip()
+        if not _is_youtube_url(url):
+            return await fail("bad_url", "Only YouTube video URLs are supported.")
+        kind = start.get("kind") if start.get("kind") in ("mp4", "webm", "mp3") else "mp4"
+        try:
+            height = int(start.get("height") or 0) or None
+        except (TypeError, ValueError):
+            height = None
+
+        if _yt_relay_active.get(user_id, 0) >= YT_RELAY_MAX_PER_USER:
+            user_id = None  # not counted, so don't decrement in finally
+            return await fail("busy", "You already have downloads starting. Please wait a moment.")
+        _yt_relay_active[user_id] = _yt_relay_active.get(user_id, 0) + 1
+
+        reader = asyncio.create_task(_relay_reader(ws, session))
+        if _yt_relay_semaphore is None:
+            _yt_relay_semaphore = asyncio.Semaphore(YT_RELAY_MAX_CONCURRENT)
+        print(f"[youtube-relay] user={user_id} kind={kind} height={height} url={url!r}")
+        try:
+            async with _yt_relay_semaphore:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(_relay_extract, session, url, kind, height),
+                    YT_RELAY_SESSION_TIMEOUT,
+                )
+        except asyncio.TimeoutError:
+            session.close()
+            return await fail("timeout", "Getting the video's links took too long. Please try again.")
+        except Exception as e:
+            code, message = _relay_error_for(e)
+            if not session.closed:
+                print(f"[youtube-relay] user={user_id} failed ({code}) after {session.requests} request(s): {e}")
+            return await fail(code, message)
+
+        print(f"[youtube-relay] user={user_id} ok: {len(result['streams'])} stream(s) "
+              f"via {session.requests} relayed request(s)")
+        await session.send({"type": "result", **result})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        session.close()
+        if reader:
+            reader.cancel()
+        if user_id:
+            remaining = _yt_relay_active.get(user_id, 1) - 1
+            if remaining > 0:
+                _yt_relay_active[user_id] = remaining
+            else:
+                _yt_relay_active.pop(user_id, None)
+        try:
+            await ws.close()
+        except Exception:
+            pass

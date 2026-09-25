@@ -18,7 +18,7 @@
         { id: 'mp3', label: 'MP3' },
     ];
     const HEIGHTS = [2160, 1440, 1080, 720, 480, 360];
-    const ACTIVE = ['queued', 'downloading', 'processing'];
+    const ACTIVE = ['extracting', 'queued', 'downloading', 'processing', 'ready'];
 
     let host = null;
     let shadow = null;
@@ -120,6 +120,11 @@
         .job.processing .bar > div { animation: pulse 1.2s ease-in-out infinite; }
         .job-status { color: #9ca3af; font-size: 11px; }
         .job.failed .job-status { color: #fca5a5; }
+        .job-retry {
+            align-self: flex-start; appearance: none; border: 1px solid rgba(255,255,255,.2); background: transparent;
+            color: #f3f4f6; font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 7px; cursor: pointer;
+        }
+        .job-retry:hover { border-color: #10b981; }
         @keyframes pulse { 50% { opacity: .45; } }
         @media (prefers-reduced-motion: reduce) {
             .fab, .bar > div { transition: none; }
@@ -291,14 +296,41 @@
     }
 
     function statusText(job) {
+        const percent = Math.round(job.percent || 0);
+        const onServer = job.mode === 'server';
         switch (job.status) {
+            case 'extracting': return 'Getting download links…';
             case 'queued': return 'Waiting for server…';
-            case 'downloading': return `Downloading on server… ${Math.round(job.percent || 0)}%`;
-            case 'processing': return job.kind === 'mp3' ? 'Converting to MP3…' : 'Merging video and audio…';
+            case 'downloading': return onServer ? `Preparing on server… ${percent}%` : `Downloading… ${percent}%`;
+            case 'processing': {
+                const step = job.kind === 'mp3' ? 'Converting to MP3…' : 'Merging video and audio…';
+                return !onServer && job.kind === 'mp3' && percent ? `${step} ${percent}%` : step;
+            }
+            case 'ready': return 'Saving…';
             case 'saved': return 'Saved to your Downloads folder.';
-            case 'ready': return 'Starting download…';
             case 'cancelled': return 'Cancelled.';
             default: return job.error || 'Download failed.';
+        }
+    }
+
+    async function retryOnServer(jobId, job) {
+        jobs.delete(jobId);
+        chrome.runtime.sendMessage({ action: 'YT_DISMISS_JOB', jobId }).catch(() => {});
+        renderJobs();
+        try {
+            const result = await chrome.runtime.sendMessage({
+                action: 'YT_START_DOWNLOAD',
+                mode: 'server',
+                url: job.url,
+                kind: job.kind,
+                height: job.height,
+                label: job.label,
+            });
+            if (!result?.ok && shadow) $('.error').textContent = result?.error === 'signin'
+                ? 'Please sign in again.'
+                : (result?.error || 'Could not start the server download.');
+        } catch {
+            if (shadow) $('.error').textContent = 'The extension was updated. Reload this page and try again.';
         }
     }
 
@@ -347,6 +379,14 @@
             status.textContent = statusText(job);
 
             row.append(top, bar, status);
+            if (job.status === 'error' && job.fallback && job.mode !== 'server') {
+                const retry = document.createElement('button');
+                retry.type = 'button';
+                retry.className = 'job-retry';
+                retry.textContent = 'Try server download';
+                retry.addEventListener('click', () => retryOnServer(jobId, job));
+                row.appendChild(retry);
+            }
             list.appendChild(row);
         }
         $('.fab').classList.toggle('busy', [...jobs.values()].some(job => ACTIVE.includes(job.status)));
@@ -371,10 +411,13 @@
         sync();
     }
 
+    function jobFromMessage({ url, label, kind, height, mode, status, percent, error, fallback }) {
+        return { url, label, kind, height, mode, status, percent, error, fallback };
+    }
+
     chrome.runtime.onMessage.addListener((message) => {
         if (message.action !== 'YT_JOB_STATUS') return;
-        const { jobId, label, kind, status, percent, error } = message;
-        jobs.set(jobId, { label, kind, status, percent, error });
+        jobs.set(message.jobId, jobFromMessage(message));
         renderJobs();
     });
 
@@ -395,9 +438,7 @@
 
     // Downloads started before a full page reload are still tracked by the worker.
     chrome.runtime.sendMessage({ action: 'YT_LIST_JOBS' }).then((result) => {
-        for (const { jobId, label, kind, status, percent, error } of result?.jobs || []) {
-            jobs.set(jobId, { label, kind, status, percent, error });
-        }
+        for (const job of result?.jobs || []) jobs.set(job.jobId, jobFromMessage(job));
         renderJobs();
     }).catch(() => {});
 

@@ -337,10 +337,17 @@ function withServiceWorkerKeepalive(promise) {
     return promise.finally(() => clearInterval(timer));
 }
 
+// Only one offscreen document may exist, so concurrent callers share one creation.
+let offscreenCreating = null;
 async function setupOffscreenDocument(path) {
     const existingContexts = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'], documentUrls: [chrome.runtime.getURL(path)] });
     if (existingContexts.length > 0) return;
-    await chrome.offscreen.createDocument({ url: path, reasons: ['WORKERS'], justification: 'Conversion' });
+    offscreenCreating ??= chrome.offscreen.createDocument({
+        url: path,
+        reasons: ['WORKERS', 'BLOBS'],
+        justification: 'Image conversion, and downloading/merging YouTube videos on-device'
+    }).finally(() => { offscreenCreating = null; });
+    await offscreenCreating;
 }
 
 function toggleLoadingScreen(tabId, show, text = "") {
@@ -570,17 +577,23 @@ const YT_QUALITY_LEVELS = {
     highres: 4320, hd2880: 2880, hd2160: 2160, hd1440: 1440, hd1080: 1080,
     hd720: 720, large: 480, medium: 360, small: 240, tiny: 144
 };
-// jobId -> { tabId, label, kind, height, status, percent, error }
+const YT_ACTIVE_STATUSES = ['extracting', 'queued', 'downloading', 'processing', 'ready'];
+// jobId -> { tabId, url, label, kind, height, mode: 'relay'|'server', status, percent, error, fallback }
 const ytJobs = new Map();
+
+function ytJobPayload(jobId, job) {
+    const { tabId, url, label, kind, height, mode, status, percent, error, fallback } = job;
+    return { jobId, tabId, url, label, kind, height, mode, status, percent, error, fallback };
+}
 
 function notifyYoutubeJob(jobId) {
     const job = ytJobs.get(jobId);
     if (!job) return;
-    chrome.tabs.sendMessage(job.tabId, { action: 'YT_JOB_STATUS', jobId, ...job }).catch(() => {});
+    chrome.tabs.sendMessage(job.tabId, { action: 'YT_JOB_STATUS', ...ytJobPayload(jobId, job) }).catch(() => {});
 }
 
 function ytJobsForTab(tabId) {
-    return [...ytJobs.entries()].filter(([, job]) => job.tabId === tabId).map(([jobId, job]) => ({ jobId, ...job }));
+    return [...ytJobs.entries()].filter(([, job]) => job.tabId === tabId).map(([jobId, job]) => ytJobPayload(jobId, job));
 }
 
 // Runs in the page's MAIN world: content scripts can't see YouTube's player API.
@@ -693,21 +706,114 @@ async function pollYoutubeJob(jobId, accessToken) {
     }
 }
 
-async function startYoutubeDownload(message, sender) {
-    const tabId = sender.tab?.id;
-    if (tabId === undefined) return { ok: false, error: 'No tab.' };
+function ytJobRequest(message, sender) {
+    const kind = ['mp4', 'webm', 'mp3'].includes(message.kind) ? message.kind : 'mp4';
+    return {
+        tabId: sender.tab?.id,
+        url: String(message.url || ''),
+        label: String(message.label || 'YouTube video').slice(0, 120),
+        kind,
+        height: kind === 'mp3' ? null : (Number(message.height) || null)
+    };
+}
 
+async function startYoutubeDownload(message, sender) {
+    const request = ytJobRequest(message, sender);
+    if (request.tabId === undefined) return { ok: false, error: 'No tab.' };
     const session = await getValidSession();
     if (!session?.access_token) return { ok: false, error: 'signin' };
+    return message.mode === 'server'
+        ? startServerYoutubeDownload(request, session)
+        : startRelayYoutubeDownload(request, session);
+}
 
-    const kind = ['mp4', 'webm', 'mp3'].includes(message.kind) ? message.kind : 'mp4';
-    const height = kind === 'mp3' ? null : (Number(message.height) || null);
+// Default path: yt-dlp's requests are relayed through the offscreen document so they come
+// from the user's IP; the offscreen document then downloads and merges the streams itself.
+async function startRelayYoutubeDownload(request, session) {
+    const jobId = crypto.randomUUID();
+    const job = { ...request, mode: 'relay', status: 'extracting', percent: 0, error: null, fallback: false };
+    ytJobs.set(jobId, job);
+    notifyYoutubeJob(jobId);
+    job.keepalive = setInterval(() => chrome.runtime.getPlatformInfo(), 20000);
+    try {
+        await setupOffscreenDocument('pages/offscreen.html');
+        await chrome.runtime.sendMessage({
+            target: 'offscreen-yt',
+            action: 'YT_RELAY_START',
+            jobId,
+            wsUrl: `${API_CONFIG.url.replace(/^http/, 'ws')}/youtube/extract`,
+            token: session.access_token,
+            url: request.url,
+            kind: request.kind,
+            height: request.height
+        });
+    } catch (error) {
+        console.error('[RightMate] Could not start the in-browser YouTube download', error);
+        finishRelayJob(jobId, { status: 'error', error: 'Could not start the download.', fallback: true });
+    }
+    return { ok: true, jobId };
+}
 
+function finishRelayJob(jobId, update) {
+    const job = ytJobs.get(jobId);
+    if (!job) return;
+    clearInterval(job.keepalive);
+    delete job.keepalive;
+    Object.assign(job, update);
+    notifyYoutubeJob(jobId);
+    if (job.downloadId === undefined) {
+        chrome.runtime.sendMessage({ target: 'offscreen-yt', action: 'YT_RELAY_CLEANUP', jobId }).catch(() => {});
+    }
+}
+
+async function handleRelayProgress(message) {
+    const { jobId, status } = message;
+    const job = ytJobs.get(jobId);
+    if (!job || job.mode !== 'relay' || ['cancelled', 'saved'].includes(job.status)) return;
+
+    if (status === 'ready') {
+        Object.assign(job, { status: 'ready', percent: 100 });
+        notifyYoutubeJob(jobId);
+        try {
+            job.downloadId = await chrome.downloads.download({
+                url: message.blobUrl,
+                filename: driveSafeName(message.filename, 0),
+                conflictAction: 'uniquify'
+            });
+        } catch (error) {
+            delete job.downloadId;
+            finishRelayJob(jobId, { status: 'error', error: 'Chrome could not save the file.', fallback: false });
+        }
+        return;
+    }
+    if (status === 'error' || status === 'cancelled') {
+        finishRelayJob(jobId, { status, error: message.error || null, fallback: !!message.fallback });
+        return;
+    }
+    Object.assign(job, { status, percent: message.percent || 0 });
+    notifyYoutubeJob(jobId);
+}
+
+chrome.downloads.onChanged.addListener((delta) => {
+    if (!delta.state || !['complete', 'interrupted'].includes(delta.state.current)) return;
+    for (const [jobId, job] of ytJobs) {
+        if (job.downloadId !== delta.id) continue;
+        delete job.downloadId;
+        finishRelayJob(jobId, delta.state.current === 'complete'
+            ? { status: 'saved', percent: 100 }
+            : { status: 'error', error: 'Saving the file was interrupted.', fallback: false });
+    }
+});
+
+// Fallback path: the server downloads the video itself (needs a cookies file or proxy on
+// the server if YouTube bot-checks its IP).
+async function startServerYoutubeDownload(request, session) {
+    const { kind, height } = request;
     let result;
     try {
         result = await ytApi('/youtube/jobs', session.access_token, {
             method: 'POST',
-            body: JSON.stringify({ url: message.url, kind, height })
+            body: JSON.stringify({ url: request.url, kind, height })
         });
     } catch {
         return { ok: false, error: 'Could not reach the download server.' };
@@ -716,15 +822,7 @@ async function startYoutubeDownload(message, sender) {
     if (!result.ok) return { ok: false, error: ytErrorMessage(result, 'Could not start the download.') };
 
     const jobId = result.data.job_id;
-    ytJobs.set(jobId, {
-        tabId,
-        label: String(message.label || 'YouTube video').slice(0, 120),
-        kind,
-        height,
-        status: 'queued',
-        percent: 0,
-        error: null
-    });
+    ytJobs.set(jobId, { ...request, mode: 'server', status: 'queued', percent: 0, error: null, fallback: false });
     notifyYoutubeJob(jobId);
     withServiceWorkerKeepalive(pollYoutubeJob(jobId, session.access_token))
         .catch(error => console.error('[RightMate] YouTube job polling failed', error));
@@ -734,6 +832,11 @@ async function startYoutubeDownload(message, sender) {
 async function cancelYoutubeDownload(jobId) {
     const job = ytJobs.get(jobId);
     if (!job) return { ok: false };
+    if (job.mode === 'relay') {
+        chrome.runtime.sendMessage({ target: 'offscreen-yt', action: 'YT_RELAY_CANCEL', jobId }).catch(() => {});
+        finishRelayJob(jobId, { status: 'cancelled', error: 'Download cancelled.', fallback: false });
+        return { ok: true };
+    }
     Object.assign(job, { status: 'cancelled', error: 'Download cancelled.' });
     notifyYoutubeJob(jobId);
     const session = await getValidSession();
@@ -745,9 +848,34 @@ async function cancelYoutubeDownload(jobId) {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
     for (const [jobId, job] of ytJobs) {
-        if (job.tabId === tabId && !['queued', 'downloading', 'processing'].includes(job.status)) ytJobs.delete(jobId);
+        if (job.tabId === tabId && !YT_ACTIVE_STATUSES.includes(job.status)) ytJobs.delete(jobId);
     }
 });
+
+// Requests the extension itself makes to YouTube carry "Origin: chrome-extension://…",
+// which YouTube's player API rejects with 403. Present them as youtube.com instead.
+// tabIds [-1] limits this to non-tab requests (the offscreen relay/downloader), so
+// normal browsing on YouTube is untouched.
+const YT_ORIGIN_RULE_ID = 7301;
+chrome.declarativeNetRequest.updateSessionRules({
+    removeRuleIds: [YT_ORIGIN_RULE_ID],
+    addRules: [{
+        id: YT_ORIGIN_RULE_ID,
+        priority: 1,
+        action: {
+            type: 'modifyHeaders',
+            requestHeaders: [
+                { header: 'origin', operation: 'set', value: 'https://www.youtube.com' },
+                { header: 'referer', operation: 'set', value: 'https://www.youtube.com/' }
+            ]
+        },
+        condition: {
+            tabIds: [chrome.tabs.TAB_ID_NONE],
+            requestDomains: ['youtube.com', 'googlevideo.com', 'youtubei.googleapis.com'],
+            resourceTypes: ['xmlhttprequest']
+        }
+    }]
+}).catch(error => console.error('[RightMate] Could not install the YouTube header rule', error));
 
 // Runtime message listeners
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -760,11 +888,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else if (message.action === 'YT_CANCEL') {
         cancelYoutubeDownload(message.jobId).then(sendResponse);
         return true;
+    } else if (message.action === 'YT_RELAY_PROGRESS') {
+        handleRelayProgress(message);
     } else if (message.action === 'YT_LIST_JOBS') {
         sendResponse({ jobs: ytJobsForTab(sender.tab?.id) });
     } else if (message.action === 'YT_DISMISS_JOB') {
         const job = ytJobs.get(message.jobId);
-        if (job && job.tabId === sender.tab?.id && !['queued', 'downloading', 'processing'].includes(job.status)) {
+        if (job && job.tabId === sender.tab?.id && !YT_ACTIVE_STATUSES.includes(job.status)) {
             ytJobs.delete(message.jobId);
         }
         sendResponse({ ok: true });
