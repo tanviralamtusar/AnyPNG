@@ -44,6 +44,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const session = await refreshSessionIfNeeded();
     if (session) {
         showDashboard(session);
+        showLicense();
     } else {
         window.location.replace('login.html');
     }
@@ -137,6 +138,26 @@ async function showDashboard(session) {
     
     const profileNameEl = document.getElementById('profile-name');
     if (profileNameEl) profileNameEl.innerText = fullName;
+}
+
+// The license card doubles as the way into the activation page.
+async function showLicense() {
+    const card = document.getElementById('license-card');
+    if (!card) return;
+    card.onclick = () => { window.location.href = 'license.html'; };
+
+    const state = await rmGetLicenseState();
+    const summary = document.getElementById('license-summary');
+    const device = document.getElementById('license-device');
+    if (state.licensed) {
+        summary.innerText = 'License active on this device';
+        device.innerText = state.license?.masked_key || '';
+        return;
+    }
+    summary.innerText = rmLicenseMessage(state.reason);
+    device.innerText = state.reason === 'other_device'
+        ? `Currently on ${state.license?.device_label || 'another device'}`
+        : 'Click to open license settings';
 }
 
 async function loadTheme() {

@@ -139,7 +139,7 @@ function extractLinks(job, params) {
         job.abort.signal.addEventListener('abort', () => finish(reject, new DOMException('Cancelled', 'AbortError')));
 
         ws.onopen = () => ws.send(JSON.stringify({
-            type: 'start', token: params.token, url: params.url, kind: params.kind, height: params.height,
+            type: 'start', token: params.token, license: params.license, url: params.url, kind: params.kind, height: params.height,
         }));
         ws.onmessage = async (event) => {
             let message;

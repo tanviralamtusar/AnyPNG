@@ -20,12 +20,15 @@ from typing import Literal
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, UploadFile, Depends, HTTPException, Form, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, UploadFile, Depends, Header, HTTPException, Form, Request, WebSocket, WebSocketDisconnect
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import Response, FileResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 from PIL import Image
+
+import licensing
+from supabase_rest import json_request as _supabase_json_request
 
 try:
     from rembg import new_session, remove as rembg_remove
@@ -62,6 +65,10 @@ SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 INPAINT_PERMIT_SECRET = os.getenv("INPAINT_PERMIT_SECRET", "")
 INPAINT_CREDIT_COST = 1
 
+# The static SECRET_TOKEN ships inside the extension, so it is not a secret.
+# Licensing supersedes it; set this to 1 only for a non-extension client.
+ALLOW_LEGACY_SERVICE_TOKEN = os.getenv("ALLOW_LEGACY_SERVICE_TOKEN", "0") == "1"
+
 # AI image models the client is allowed to request.
 # Keep this list in sync with the dropdown in extension/pages/settings.html.
 DEFAULT_AI_MODEL = "gemini-2.5-flash-image"
@@ -85,43 +92,105 @@ elif GOOGLE_CLOUD_PROJECT:
 
 
 # 🔒 SECURITY MIDDLEWARE
-def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    if credentials.credentials != SECRET_TOKEN:
+def verify_admin_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Server-to-server calls only. Rotate SECRET_TOKEN once the extension stops
+    shipping it, because every installed copy carries the current value."""
+    if not secrets.compare_digest(credentials.credentials, SECRET_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid Security Token")
     return credentials.credentials
 
 
-async def verify_watermark_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+def _license_http_error(exc: "licensing.LicenseError") -> HTTPException:
+    """Licensing failures carry a machine-readable reason so the extension can
+    tell "no key yet" apart from "this key moved to another device"."""
+    return HTTPException(
+        status_code=exc.status_code,
+        detail={"error": "license", "reason": exc.reason, "message": exc.message, **exc.extra},
+    )
+
+
+# Verified access tokens are cached briefly: clients poll job status and check
+# their license often enough that a Supabase round-trip per request adds up.
+AUTH_CACHE_SECONDS = 60
+_auth_cache: dict[str, tuple[str, float]] = {}
+
+
+async def _user_id_for_token(token: str) -> str | None:
+    """Supabase user id for an access token, or None."""
+    key = hashlib.sha256(token.encode()).hexdigest()
+    cached = _auth_cache.get(key)
+    now = time.time()
+    if cached and cached[1] > now:
+        return cached[0]
+    try:
+        user_id = await asyncio.to_thread(_verify_supabase_user, token)
+    except (ValueError, RuntimeError) as exc:
+        print(f"[auth] access token check failed: {exc}")
+        return None
+    if len(_auth_cache) > 5000:
+        _auth_cache.clear()
+    _auth_cache[key] = (user_id, now + AUTH_CACHE_SECONDS)
+    return user_id
+
+
+async def verify_signed_in_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
+    user_id = await _user_id_for_token(credentials.credentials)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Please sign in again.")
+    return user_id
+
+
+async def verify_licensed_device(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    x_license: str = Header(default="", alias="X-License"),
+) -> str:
+    """Require a signed-in user whose license is active on the calling device.
+
+    The entitlement token is an HMAC issued by /license/status, so this costs no
+    database round-trip; the token's lifetime bounds how long a device that lost
+    its binding can keep working.
+    """
+    user_id = await _user_id_for_token(credentials.credentials)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Please sign in again.")
+    try:
+        licensing.verify_entitlement_token(x_license, user_id)
+    except licensing.LicenseError as exc:
+        raise _license_http_error(exc) from exc
+    except RuntimeError as exc:
+        print(f"[license] verification unavailable: {exc}")
+        raise HTTPException(status_code=503, detail="License checks are temporarily unavailable.") from exc
+    return user_id
+
+
+async def verify_watermark_token(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    x_license: str = Header(default="", alias="X-License"),
+):
     """Accept the legacy service token or a Supabase user token.
 
-    The extension uses the Supabase token so this endpoint can charge the
-    authenticated user's credits server-side. The legacy token remains valid
-    for existing backend clients that do not use account billing.
+    The extension sends the Supabase token plus its X-License entitlement, so
+    this endpoint can check the license and charge the account's credits
+    server-side. The legacy static token is only honoured when
+    ALLOW_LEGACY_SERVICE_TOKEN is set, because it ships inside the extension.
     """
     token = credentials.credentials
     if token == SECRET_TOKEN:
+        if not ALLOW_LEGACY_SERVICE_TOKEN:
+            raise HTTPException(status_code=401, detail="Please sign in again.")
         return None
     try:
         user_id = _verify_supabase_user(token)
+        licensing.verify_entitlement_token(x_license, user_id)
         _consume_inpaint_credit(user_id)
         return user_id
+    except licensing.LicenseError as exc:
+        raise _license_http_error(exc) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=402, detail=str(exc)) from exc
     except Exception as exc:
         print(f"[watermark] authorization failure: {exc}")
         raise HTTPException(status_code=503, detail="Could not verify watermark-removal credits") from exc
-
-
-def _supabase_json_request(url: str, method: str, headers: dict[str, str], body: object | None = None) -> object:
-    payload = None if body is None else json.dumps(body).encode("utf-8")
-    request = urllib.request.Request(url, data=payload, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(request, timeout=15) as response:
-            raw = response.read()
-            return json.loads(raw.decode("utf-8")) if raw else None
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Supabase request failed ({exc.code}): {detail[:300]}") from exc
 
 
 def _verify_supabase_user(access_token: str) -> str:
@@ -333,13 +402,19 @@ async def ping():
 
 
 @app.post("/inpaint/authorize")
-async def authorize_local_inpaint(credentials: HTTPAuthorizationCredentials = Depends(security)):
+async def authorize_local_inpaint(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    x_license: str = Header(default="", alias="X-License"),
+):
     """Authorize one local inpainting run without receiving the image or mask."""
     try:
         user_id = await asyncio.to_thread(_verify_supabase_user, credentials.credentials)
+        licensing.verify_entitlement_token(x_license, user_id)
         remaining = await asyncio.to_thread(_consume_inpaint_credit, user_id)
         permit = _make_inpaint_permit(user_id)
         return {"authorized": True, "permit": permit, "remaining_credits": remaining, "expires_in": 300}
+    except licensing.LicenseError as exc:
+        raise _license_http_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     except PermissionError as exc:
@@ -349,7 +424,127 @@ async def authorize_local_inpaint(credentials: HTTPAuthorizationCredentials = De
         raise HTTPException(status_code=503, detail="Credit authorization is temporarily unavailable.") from exc
 
 
-@app.post("/upscale", dependencies=[Depends(verify_token)])
+# LICENSING
+#
+# Flow: the extension signs in, generates a device id, and calls /license/status.
+# If that says it is not licensed, the user enters a key and /license/activate
+# binds it to this (account, device). Both return a short-lived entitlement
+# token that the protected endpoints verify.
+
+
+class LicenseActivateRequest(BaseModel):
+    key: str
+    device_id: str
+    device_label: str | None = None
+
+
+class LicenseDeviceRequest(BaseModel):
+    device_id: str
+
+
+class LicenseMintRequest(BaseModel):
+    count: int = 1
+    provider: str | None = "manual"
+    order_id: str | None = None
+    email: str | None = None
+
+
+@app.post("/license/status")
+async def license_status(body: LicenseDeviceRequest, user_id: str = Depends(verify_signed_in_user)):
+    try:
+        return await asyncio.to_thread(licensing.status_for, user_id, body.device_id)
+    except licensing.LicenseError as exc:
+        raise _license_http_error(exc) from exc
+    except RuntimeError as exc:
+        print(f"[license] status failed: {exc}")
+        raise HTTPException(status_code=503, detail="License checks are temporarily unavailable.") from exc
+
+
+@app.post("/license/activate")
+async def license_activate(body: LicenseActivateRequest, user_id: str = Depends(verify_signed_in_user)):
+    try:
+        return await asyncio.to_thread(
+            licensing.activate, body.key, user_id, body.device_id, body.device_label
+        )
+    except licensing.LicenseError as exc:
+        raise _license_http_error(exc) from exc
+    except RuntimeError as exc:
+        print(f"[license] activation failed: {exc}")
+        raise HTTPException(status_code=503, detail="Activation is temporarily unavailable.") from exc
+
+
+@app.post("/license/deactivate")
+async def license_deactivate(body: LicenseDeviceRequest, user_id: str = Depends(verify_signed_in_user)):
+    try:
+        return await asyncio.to_thread(licensing.release, user_id, body.device_id)
+    except licensing.LicenseError as exc:
+        raise _license_http_error(exc) from exc
+    except RuntimeError as exc:
+        print(f"[license] deactivation failed: {exc}")
+        raise HTTPException(status_code=503, detail="Deactivation is temporarily unavailable.") from exc
+
+
+@app.post("/license/admin/mint", dependencies=[Depends(verify_admin_token)])
+async def license_admin_mint(body: LicenseMintRequest):
+    """Mint keys by hand until a payment provider is wired into the webhook."""
+    count = max(1, min(int(body.count or 1), 100))
+    try:
+        keys = [
+            (await asyncio.to_thread(
+                licensing.mint, body.provider, body.order_id if count == 1 else None, body.email
+            ))["key"]
+            for _ in range(count)
+        ]
+    except RuntimeError as exc:
+        print(f"[license] mint failed: {exc}")
+        raise HTTPException(status_code=503, detail="Could not create license keys.") from exc
+    return {"keys": keys}
+
+
+def _webhook_signature_ok(provider: str, raw: bytes, headers, secret: str) -> bool:
+    """Generic HMAC-SHA256-over-the-raw-body check.
+
+    Lemon Squeezy (X-Signature) and Paddle use this shape; Stripe and Gumroad do
+    not, so add their scheme here once a provider is chosen.
+    """
+    sent = headers.get("x-signature") or headers.get("x-webhook-signature") or ""
+    expected = hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+    return bool(sent) and hmac.compare_digest(expected, sent.strip().lower())
+
+
+@app.post("/license/webhook/{provider}")
+async def license_webhook(provider: str, request: Request):
+    """Mint a key when a purchase completes.
+
+    No provider has been chosen yet, so this stays disabled unless
+    LICENSE_WEBHOOK_SECRET is set. Before going live, add the provider signature
+    scheme in _webhook_signature_ok and map its payload fields below: an
+    unauthenticated mint endpoint is a free key generator.
+    """
+    secret = os.getenv("LICENSE_WEBHOOK_SECRET", "")
+    if not secret:
+        raise HTTPException(status_code=501, detail="Purchase webhooks are not configured yet.")
+
+    raw = await request.body()
+    if not _webhook_signature_ok(provider, raw, request.headers, secret):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+
+    try:
+        payload = json.loads(raw.decode("utf-8") or "{}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid webhook payload") from exc
+
+    order_id = str(payload.get("order_id") or payload.get("id") or "") or None
+    email = payload.get("email") or payload.get("buyer_email")
+    if not order_id:
+        raise HTTPException(status_code=400, detail="Webhook payload has no order id")
+
+    result = await asyncio.to_thread(licensing.mint, provider, order_id, email)
+    print(f"[license] webhook provider={provider} order={order_id} {result['status']}")
+    return {"status": result["status"], "key": result["key"]}
+
+
+@app.post("/upscale", dependencies=[Depends(verify_licensed_device)])
 async def upscale_image(
     image: UploadFile = File(...),
     scale: str = Form("2"),
@@ -368,7 +563,7 @@ async def upscale_image(
     )
 
 
-@app.post("/remove-background", dependencies=[Depends(verify_token)])
+@app.post("/remove-background", dependencies=[Depends(verify_licensed_device)])
 async def remove_background_api(
     image: UploadFile = File(...),
     model: str = Form(DEFAULT_AI_MODEL),
@@ -407,7 +602,6 @@ YT_MAX_ACTIVE_PER_USER = 2
 YT_JOB_TTL_SECONDS = int(os.getenv("YT_JOB_TTL_SECONDS", "1800"))
 YT_SWEEP_INTERVAL_SECONDS = 300
 YT_FILE_TOKEN_TTL_SECONDS = 600
-YT_AUTH_CACHE_SECONDS = 60
 
 # Optional Netscape cookies file from a logged-in (throwaway) YouTube account, used to
 # get past "Sign in to confirm you're not a bot" on datacenter IPs.
@@ -462,7 +656,6 @@ class YoutubeJobRequest(BaseModel):
 YT_JOBS: dict[str, YoutubeJob] = {}
 _yt_semaphore: asyncio.Semaphore | None = None
 _yt_tasks: set[asyncio.Task] = set()
-_yt_auth_cache: dict[str, tuple[str, float]] = {}
 
 
 def _is_youtube_url(url: str) -> bool:
@@ -677,31 +870,6 @@ def _check_file_token(job_id: str, token: str) -> bool:
     return hmac.compare_digest(expected, sig)
 
 
-async def _user_id_for_token(token: str) -> str | None:
-    """Supabase user id for an access token, or None. Cached briefly because clients poll."""
-    key = hashlib.sha256(token.encode()).hexdigest()
-    cached = _yt_auth_cache.get(key)
-    now = time.time()
-    if cached and cached[1] > now:
-        return cached[0]
-    try:
-        user_id = await asyncio.to_thread(_verify_supabase_user, token)
-    except (ValueError, RuntimeError) as exc:
-        print(f"[youtube] auth check failed: {exc}")
-        return None
-    if len(_yt_auth_cache) > 5000:
-        _yt_auth_cache.clear()
-    _yt_auth_cache[key] = (user_id, now + YT_AUTH_CACHE_SECONDS)
-    return user_id
-
-
-async def verify_signed_in_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
-    user_id = await _user_id_for_token(credentials.credentials)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Please sign in again.")
-    return user_id
-
-
 def _job_status_payload(job: YoutubeJob) -> dict:
     payload = {
         "job_id": job.id,
@@ -740,7 +908,7 @@ async def _start_youtube_sweeper() -> None:
 
 
 @app.post("/youtube/jobs")
-async def create_youtube_job(body: YoutubeJobRequest, user_id: str = Depends(verify_signed_in_user)):
+async def create_youtube_job(body: YoutubeJobRequest, user_id: str = Depends(verify_licensed_device)):
     if yt_dlp is None:
         raise HTTPException(status_code=503, detail="Video downloads are not available on this server.")
     url = body.url.strip()
@@ -1071,6 +1239,11 @@ async def youtube_extract(ws: WebSocket):
         user_id = await _user_id_for_token(str(start.get("token") or ""))
         if not user_id:
             return await fail("signin", "Please sign in again.")
+        try:
+            licensing.verify_entitlement_token(str(start.get("license") or ""), user_id)
+        except licensing.LicenseError as exc:
+            user_id = None  # not counted yet, so nothing to decrement in finally
+            return await fail("license", exc.message)
         url = str(start.get("url") or "").strip()
         if not _is_youtube_url(url):
             return await fail("bad_url", "Only YouTube video URLs are supported.")

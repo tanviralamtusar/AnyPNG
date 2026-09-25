@@ -32,11 +32,11 @@ Extension: no build step. Load `extension/` directly via `chrome://extensions` �
 
 Single-file FastAPI app exposing:
 - `GET /ping` — health check.
-- `POST /upscale`, `POST /remove-background` — gated by the static bearer `SECRET_TOKEN` (`verify_token`).
-- `POST /remove-watermark` — gated by `verify_watermark_token`, which accepts either the legacy static token OR a Supabase user JWT. When a Supabase JWT is used, it calls `_verify_supabase_user` (validates against Supabase Auth) then `_consume_inpaint_credit` (atomic compare-and-swap decrement against `profiles.credits` via the Supabase REST API using the service-role key, with retry on concurrent-write conflicts).
+- `POST /upscale`, `POST /remove-background` — gated by `verify_licensed_device` (Supabase user JWT + the `X-License` entitlement token). The old static-bearer path is gone: `SECRET_TOKEN` shipped inside the extension and was therefore public.
+- `POST /remove-watermark` — gated by `verify_watermark_token`, which takes a Supabase user JWT plus the `X-License` entitlement, calls `_verify_supabase_user` (validates against Supabase Auth), then `_consume_inpaint_credit` (atomic compare-and-swap decrement against `profiles.credits` via the Supabase REST API using the service-role key, with retry on concurrent-write conflicts). The legacy static-token path only works when `ALLOW_LEGACY_SERVICE_TOKEN=1`. **Note: the route itself does not currently exist in `main.py`** — only its dependency does, so the extension's `callWatermarkBackend` would 404 against this backend.
 - `POST /inpaint/authorize` — issues a short-lived signed permit (`_make_inpaint_permit`, HMAC via `INPAINT_PERMIT_SECRET`) after validating the Supabase session and consuming a credit, so the local WebGPU editor can prove it's allowed to run without ever uploading the image.
 - `WS /youtube/extract` is the **default YouTube path, the browser relay**:
-  - The first message is `{type:"start", token, url, kind, height}`.
+  - The first message is `{type:"start", token, license, url, kind, height}`; the relay verifies the license entitlement before doing any work.
   - yt-dlp runs through `RelayYDL`, whose only request handler, `BrowserRelayRH` (`build_request_director` override), sends every HTTP request to the extension as `{type:"fetch"}` and blocks until `{type:"fetch_result"}` comes back (`asyncio.run_coroutine_threadsafe`).
   - The server replies with `{type:"result", streams:[…]}`: direct https stream URLs, which are locked to the user's IP.
   - YouTube never sees the server, so no bot check; about 3 small requests per video, and the server stores no media.
@@ -53,13 +53,27 @@ Single-file FastAPI app exposing:
 
 Watermark removal on the server uses Gemini via `google-genai` (`run_gemini_image_edit`); background removal uses `rembg` (optional import — the app stays bootable without it). Image editing model choice is restricted to `ALLOWED_AI_MODELS`, which **must be kept in sync with the dropdown in `extension/pages/settings.html`**.
 
-Required env vars (see `backend/.env.example`): `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `INPAINT_PERMIT_SECRET`. The service-role key and permit secret must never be shipped in the extension — only the anon key and Supabase user JWTs travel to the client.
+Required env vars (see `backend/.env.example`): `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `INPAINT_PERMIT_SECRET`, `LICENSE_TOKEN_SECRET`. The service-role key and both secrets must never be shipped in the extension — only the anon key and Supabase user JWTs travel to the client.
+
+`backend/supabase_rest.py` holds the shared PostgREST/service-role helper and `backend/licensing.py` the licensing logic; `backend/Dockerfile` copies all three Python files.
+
+## Licensing (`backend/licensing.py`, `extension/scripts/license.js`)
+
+One key per purchase, claimed by one account, active on **one device at a time**. Nothing in the extension works without it — including the purely local image conversions.
+
+- Tables `public.licenses` and `public.license_events` have RLS on with **no policies**: only the backend's service-role key reaches them.
+- Every state change runs in a Postgres function under a row lock, so two devices racing to activate resolve to one winner: `claim_license` (activate/takeover), `touch_license` (entitlement check + heartbeat), `release_license` (deactivate), `mint_license` (idempotent per `provider`+`order_id`). EXECUTE is revoked from `PUBLIC`; only `service_role` may call them.
+- Moving a key to a new device takes over automatically, but only once per `LICENSE_SWITCH_COOLDOWN_HOURS` (24 by default). Deactivating counts as that switch so it cannot be used to bypass the cooldown; re-binding the device you just deactivated is exempt, tracked via `previous_device_id`.
+- `POST /license/status|activate|deactivate` take a Supabase JWT and a client-generated `device_id`, and return a short-lived HMAC **entitlement token** (`LICENSE_TOKEN_SECRET`) that protected endpoints verify instead of hitting the database. Its TTL is both the offline grace period and the worst case before a revoked or moved license locks a stale device out.
+- `POST /license/admin/mint` (bearer `SECRET_TOKEN`) mints keys by hand. `POST /license/webhook/{provider}` is a **stub**: it refuses unless `LICENSE_WEBHOOK_SECRET` is set, and its signature check and payload mapping must be completed for the chosen payment provider before going live.
+- The device id is a `crypto.randomUUID()` in `chrome.storage.local` — deliberately never `storage.sync`, which would copy it to every machine on the Chrome profile. It is spoofable by anyone editing extension storage; this is licensing friction plus an audit trail, not DRM.
 
 ## Extension architecture (`extension/`)
 
 Manifest V3, no bundler — scripts are plain JS loaded directly by the manifest. Key files:
 - `manifest.json` — permissions, context menus registration point, content scripts, CSP.
-- `scripts/background.js` — the service worker; owns all context-menu creation (`createContextMenus`) and click handling (`chrome.contextMenus.onClicked`), the Supabase session lifecycle (`getValidSession`, token refresh), the watermark billing flow (`callWatermarkBackend`), and the Google Drive bulk-download queue. `API_CONFIG` here holds the deployed backend URL and the static `basicToken`; `SUPABASE_URL`/`SUPABASE_ANON_KEY` are duplicated as top-level consts across `background.js`, `dashboard.js`, `forgot-password.js`, `login.js`, `popup.js`, `signup.js`, `settings.js` — if you rotate the anon key or Supabase project, update it in every one of those files.
+- `scripts/license.js` — shared by the service worker (`importScripts`) and the pages (`<script>`). Owns the backend URL (`RIGHTMATE_API_URL`), the Supabase constants, the session refresh (`rmGetSession`), the per-install device id, the entitlement cache, and `rmGetLicenseState` / `rmActivateLicense` / `rmDeactivateLicense` / `rmAuthHeaders`.
+- `scripts/background.js` — the service worker; owns all context-menu creation (`createContextMenus`, plus `refreshLicenseMenus`, which greys the tools out when unlicensed) and click handling (`chrome.contextMenus.onClicked`, gated by `ensureLicensed`), the watermark billing flow (`callWatermarkBackend`), and the Google Drive bulk-download queue. Protected calls take their headers from `requireAuthHeaders()`. `SUPABASE_URL`/`SUPABASE_ANON_KEY` are still duplicated as top-level consts in `dashboard.js`, `forgot-password.js`, `login.js`, `signup.js`, `settings.js` — if you rotate the anon key or Supabase project, update `license.js` and every one of those files.
 - `scripts/content.js` — runs on all pages; resolves the actual image URL under the cursor for the context-menu handler (`resolveContextImageUrlViaContentScript` in background.js messages this).
 - `scripts/offscreen.js` + `pages/offscreen.html` — an offscreen document (required because MV3 service workers have no DOM/canvas) that does local, on-device work: image format conversion (canvas + bundled libavif WASM for AVIF) and on-device background removal (via bundled transformers.js/onnxruntime-web models in `scripts/transformers/`).
 - `scripts/drive-downloader.js` — injected only on `drive.google.com`; scans a Drive folder page for media files and hands them to `background.js`'s Drive download queue.
@@ -74,15 +88,18 @@ Manifest V3, no bundler — scripts are plain JS loaded directly by the manifest
   - A `declarativeNetRequest` session rule rewrites `Origin`/`Referer` to youtube.com for non-tab requests (`tabIds:[-1]`). Without it, YouTube's player API returns 403 because of the `chrome-extension://` origin.
   - When the relay fails, or a merge would exceed ~1.5 GB (the ffmpeg.wasm memory limit), the overlay offers "Try server download", which sends `YT_START_DOWNLOAD` with `mode:'server'`. That creates a server job; background.js polls it and gives the signed URL to `chrome.downloads`.
   - `YT_CANCEL`, `YT_LIST_JOBS`, `YT_DISMISS_JOB` and `OPEN_LOGIN` handle cancelling, restoring jobs after a reload, dismissing finished jobs and opening the login page.
-- `pages/` + matching `scripts/*.js` — the extension's UI surfaces (popup, options/settings, login/signup/forgot-password, dashboard, user profile, processing status). Each auth-related page independently manages its own Supabase session refresh.
+- `pages/license.html` + `scripts/license-page.js` — key entry, the current binding, takeover and deactivate.
+- `pages/` + matching `scripts/*.js` — the extension's UI surfaces (popup, options/settings, login/signup/forgot-password, dashboard, user profile, processing status). `popup.html` is the router: signed out goes to `login.html`, unlicensed to `license.html`, otherwise `dashboard.html`; `login.js` and `signup.js` hand off to it. The remaining auth pages still manage their own Supabase session refresh.
 - `inpaint/` — build output of the root Vite project (the WebGPU local inpainting editor). Present for historical/dev reasons; the shipped watermark-removal context-menu action calls the backend `/remove-watermark` endpoint directly and does not open this editor.
 
 ### Context menu → action flow (background.js)
 
 `createContextMenus()` removes and rebuilds all menu items on install/startup (needed so extension updates don't collide with stale ids from a previous version). The single `chrome.contextMenus.onClicked` listener branches on `info.menuItemId`:
-- `watermark_png` — fetches the image, requires a signed-in Supabase session, then POSTs to `/remove-watermark` with the user's access token (server deducts a credit).
-- `upscale_png` / `remove_bg_png` — background removal tries the on-device offscreen model first and falls back to the server `/remove-background` endpoint on failure; upscaling always calls the server `/upscale` endpoint. Both use the static `basicToken`, not user auth.
-- `download_<format>` (`imageFormatFromMenuId`) — fully local conversion via the offscreen document; never touches the backend.
+Every branch is preceded by `ensureLicensed()`, which opens `pages/license.html` and stops the action when this device is not licensed.
+- `watermark_png` — fetches the image, requires a signed-in Supabase session, then POSTs to `/remove-watermark` with the user's access token and entitlement (server deducts a credit).
+- `upscale_png` / `remove_bg_png` — background removal tries the on-device offscreen model first and falls back to the server `/remove-background` endpoint on failure; upscaling always calls the server `/upscale` endpoint. Both send the user's JWT plus `X-License`.
+- `download_<format>` (`imageFormatFromMenuId`) — fully local conversion via the offscreen document; never touches the backend, but is still license-gated.
+- `open_license` — only visible while unlicensed; opens the activation page.
 
 ## Extension versioning
 

@@ -1,3 +1,7 @@
+// license.js owns the device id, the entitlement cache and the Supabase session
+// refresh, and is also loaded directly by the extension pages.
+importScripts('license.js');
+
 // Local (offscreen-canvas) image conversion targets. `download_<key>` is the
 // context-menu id for each; `lossy` decides whether the saved quality setting applies.
 const IMAGE_FORMATS = {
@@ -147,6 +151,10 @@ async function getConversionQuality() {
     return Number.isFinite(quality) && quality > 0 && quality <= 1 ? quality : DEFAULT_CONVERSION_QUALITY;
 }
 
+// Grey the tools out rather than letting a click fail: an unlicensed install
+// should say what is missing before the user picks an action.
+const LICENSED_MENU_IDS = ["upscale_png", "remove_bg_png", ...Object.keys(IMAGE_FORMATS).map(key => `download_${key}`)];
+
 // Create the Right-Click Menus. Run on service-worker startup as well so a
 // reload immediately removes menu entries from older extension versions.
 function createContextMenus() {
@@ -159,10 +167,42 @@ function createContextMenus() {
         });
         chrome.contextMenus.create({ id: "upscale_png", title: "✨ Upscale & Download", parentId: "pro_image_tools", contexts: ["image"] });
         chrome.contextMenus.create({ id: "remove_bg_png", title: "✂️ Remove Background", parentId: "pro_image_tools", contexts: ["image"] });
+        chrome.contextMenus.create({ id: "open_license", title: "🔑 Activate your license", parentId: "pro_image_tools", contexts: ["page", "image"], visible: false });
+        refreshLicenseMenus();
     });
 }
 chrome.runtime.onInstalled.addListener(createContextMenus);
 createContextMenus();
+
+
+async function refreshLicenseMenus() {
+    const licensed = await rmIsLicensed().catch(() => false);
+    for (const id of LICENSED_MENU_IDS) {
+        chrome.contextMenus.update(id, { enabled: licensed }, () => void chrome.runtime.lastError);
+    }
+    chrome.contextMenus.update("open_license", { visible: !licensed }, () => void chrome.runtime.lastError);
+    chrome.contextMenus.update("pro_image_tools", { title: licensed ? "RightMate" : "RightMate (license required)" },
+        () => void chrome.runtime.lastError);
+    return licensed;
+}
+
+/**
+ * Gate for every user-triggered action. Opens the license page and tells the
+ * caller to stop when this device is not licensed.
+ */
+async function ensureLicensed({ notify = true } = {}) {
+    const state = await rmGetLicenseState();
+    await refreshLicenseMenus();
+    if (state.licensed) return true;
+    if (notify) {
+        chrome.notifications.create({
+            type: 'basic', iconUrl: ICON_URL, title: 'RightMate',
+            message: rmLicenseMessage(state.reason)
+        });
+    }
+    if (state.reason !== 'offline') rmOpenLicensePage();
+    return false;
+}
 
 // Bare relative iconUrl strings ("icons/icon48.png") resolve unreliably for
 // chrome.notifications.create() from an MV3 service worker (intermittent
@@ -193,7 +233,7 @@ async function authorizeLocalInpaint() {
     if (!accessToken) throw new Error('Please sign in to use inpainting credits.');
     const response = await fetch(`${API_CONFIG.url}/inpaint/authorize`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${accessToken}` },
+        headers: await requireAuthHeaders(),
     });
     let data = null;
     try { data = await response.json(); } catch (_) { /* handled below */ }
@@ -272,47 +312,15 @@ async function resolveContextImageUrlViaContentScript(info, tab) {
     }
 }
 
-const API_CONFIG = {
-    url: "https://anypng.botbhai.net",
-    basicToken: "my_super_secret_hostinger_token_123!"
-};
+// The old static basicToken is gone: it shipped in this file, so anyone who
+// unpacked the extension had it. Protected endpoints now take the user's
+// Supabase token plus the signed entitlement from license.js.
+const API_CONFIG = { url: RIGHTMATE_API_URL };
 
-const SUPABASE_URL = "https://yknravxmhhwgwccflefc.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlrbnJhdnhtaGh3Z3djY2ZsZWZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDE1NzksImV4cCI6MjA4NzYxNzU3OX0.8crtZn3ZHqqaCg0VKLuhSzjNv0Kxf9vPolAfCwB_edI";
-
-async function getValidSession() {
-    let { supabaseSession } = await chrome.storage.local.get('supabaseSession');
-    if (!supabaseSession) return null;
-    
-    if (supabaseSession.refresh_token) {
-        try {
-            const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json', 
-                    'apikey': SUPABASE_ANON_KEY,
-                    'x-client-info': 'anypng-extension'
-                },
-                body: JSON.stringify({ refresh_token: supabaseSession.refresh_token })
-            });
-            
-            if (res.ok) {
-                const newSession = await res.json();
-                supabaseSession = { ...supabaseSession, ...newSession };
-                await chrome.storage.local.set({ supabaseSession: supabaseSession });
-            } else {
-                const errorData = await res.json();
-                console.error('Session refresh failed:', errorData);
-                await chrome.storage.local.remove('supabaseSession');
-                return null;
-            }
-        } catch (e) {
-            console.error('Session refresh failed:', e);
-            await chrome.storage.local.remove('supabaseSession');
-            return null;
-        }
-    }
-    return supabaseSession;
+// Session handling lives in license.js so the pages and the worker share one
+// refresh path.
+function getValidSession() {
+    return rmGetSession();
 }
 
 let cachedImageBlob = null;
@@ -358,8 +366,14 @@ function toggleLoadingScreen(tabId, show, text = "") {
 // Listen for clicks
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
+    if (info.menuItemId === "open_license") {
+        rmOpenLicensePage();
+        return;
+    }
+    if (!await ensureLicensed()) return;
+
     // ==========================================
-    // 🆓 FREE TOOLS: UPSCALE & BG REMOVE (Uses Basic Token & Standard Loading)
+    // ✨ AI TOOLS: UPSCALE & BACKGROUND REMOVAL
     // ==========================================
     if (info.menuItemId === "upscale_png" || info.menuItemId === "remove_bg_png") {
         chrome.storage.sync.get(['upscaleFactor'], async (settings) => {
@@ -395,10 +409,10 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
                         formData.append('image', imageBlob);
                         const apiRes = await fetch(`${API_CONFIG.url}/remove-background`, {
                             method: 'POST',
-                            headers: { 'Authorization': `Bearer ${API_CONFIG.basicToken}` },
+                            headers: await requireAuthHeaders(),
                             body: formData
                         });
-                        if (!apiRes.ok) throw new Error(`Server Error: ${apiRes.statusText}`);
+                        if (!apiRes.ok) throw new Error(await apiErrorMessage(apiRes));
                         finalBlob = await apiRes.blob();
                     }
                 } else {
@@ -407,10 +421,10 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
                     formData.append('scale', scale);
                     const apiRes = await fetch(`${API_CONFIG.url}/upscale`, {
                         method: 'POST',
-                        headers: { 'Authorization': `Bearer ${API_CONFIG.basicToken}` },
+                        headers: await requireAuthHeaders(),
                         body: formData
                     });
-                    if (!apiRes.ok) throw new Error(`Server Error: ${apiRes.statusText}`);
+                    if (!apiRes.ok) throw new Error(await apiErrorMessage(apiRes));
                     finalBlob = await apiRes.blob();
                 }
 
@@ -459,6 +473,29 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         }
     }
 });
+
+// Authorization + X-License for a protected backend call. Throws rather than
+// sending an unauthenticated request that the server would reject anyway.
+async function requireAuthHeaders() {
+    const headers = await rmAuthHeaders();
+    if (!headers) {
+        refreshLicenseMenus();
+        throw new Error(rmLicenseMessage((await rmGetLicenseState()).reason));
+    }
+    return headers;
+}
+
+// A licensing rejection carries a structured detail; anything else may not.
+async function apiErrorMessage(response) {
+    let detail = null;
+    try { detail = (await response.json())?.detail; } catch { /* non-JSON body */ }
+    if (detail?.error === 'license') {
+        rmGetLicenseState({ force: true }).then(refreshLicenseMenus);
+        return detail.message;
+    }
+    if (typeof detail === 'string') return detail;
+    return `Server error (${response.status}).`;
+}
 
 // Extract the Supabase access token from a session object (handles nested formats)
 function getAccessToken(session) {
@@ -509,14 +546,11 @@ async function callWatermarkBackend(prompt, session, method = "standard", downlo
     try {
         const apiRes = await fetch(`${API_CONFIG.url}/remove-watermark`, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${accessToken}` },
+            headers: await requireAuthHeaders(),
             body: formData
         });
 
-        if (!apiRes.ok) {
-            const errData = await apiRes.json();
-            throw new Error(errData.detail || "Server error");
-        }
+        if (!apiRes.ok) throw new Error(await apiErrorMessage(apiRes));
 
         const finalBlob = await apiRes.blob();
         const base64Data = await blobToDataUrl(finalBlob);
@@ -613,7 +647,14 @@ function readYoutubePlayerQualities() {
 
 async function getYoutubeQualities(sender, expectedVideoId) {
     const { supabaseSession } = await chrome.storage.local.get('supabaseSession');
-    const result = { isSignedIn: !!supabaseSession?.access_token, maxHeight: null, isLive: false };
+    const license = await rmGetLicenseState();
+    const result = {
+        isSignedIn: !!supabaseSession?.access_token,
+        isLicensed: !!license.licensed,
+        licenseMessage: license.licensed ? null : rmLicenseMessage(license.reason),
+        maxHeight: null,
+        isLive: false
+    };
     try {
         const [injection] = await chrome.scripting.executeScript({
             target: { tabId: sender.tab.id, frameIds: [sender.frameId ?? 0] },
@@ -722,14 +763,19 @@ async function startYoutubeDownload(message, sender) {
     if (request.tabId === undefined) return { ok: false, error: 'No tab.' };
     const session = await getValidSession();
     if (!session?.access_token) return { ok: false, error: 'signin' };
+    const license = await rmGetLicenseState();
+    if (!license.licensed) {
+        refreshLicenseMenus();
+        return { ok: false, error: 'license', message: rmLicenseMessage(license.reason) };
+    }
     return message.mode === 'server'
-        ? startServerYoutubeDownload(request, session)
-        : startRelayYoutubeDownload(request, session);
+        ? startServerYoutubeDownload(request, session, license.token)
+        : startRelayYoutubeDownload(request, session, license.token);
 }
 
 // Default path: yt-dlp's requests are relayed through the offscreen document so they come
 // from the user's IP; the offscreen document then downloads and merges the streams itself.
-async function startRelayYoutubeDownload(request, session) {
+async function startRelayYoutubeDownload(request, session, entitlement) {
     const jobId = crypto.randomUUID();
     const job = { ...request, mode: 'relay', status: 'extracting', percent: 0, error: null, fallback: false };
     ytJobs.set(jobId, job);
@@ -743,6 +789,7 @@ async function startRelayYoutubeDownload(request, session) {
             jobId,
             wsUrl: `${API_CONFIG.url.replace(/^http/, 'ws')}/youtube/extract`,
             token: session.access_token,
+            license: entitlement,
             url: request.url,
             kind: request.kind,
             height: request.height
@@ -807,12 +854,13 @@ chrome.downloads.onChanged.addListener((delta) => {
 
 // Fallback path: the server downloads the video itself (needs a cookies file or proxy on
 // the server if YouTube bot-checks its IP).
-async function startServerYoutubeDownload(request, session) {
+async function startServerYoutubeDownload(request, session, entitlement) {
     const { kind, height } = request;
     let result;
     try {
         result = await ytApi('/youtube/jobs', session.access_token, {
             method: 'POST',
+            headers: { 'X-License': entitlement },
             body: JSON.stringify({ url: request.url, kind, height })
         });
     } catch {
@@ -877,6 +925,24 @@ chrome.declarativeNetRequest.updateSessionRules({
     }]
 }).catch(error => console.error('[RightMate] Could not install the YouTube header rule', error));
 
+function startDriveQueue(tabId, message, files, sendResponse) {
+    const folder = driveSafeFolder(message.folder);
+    const concurrency = driveConcurrency(message.concurrency);
+    driveDownloadJobs.set(tabId, {
+        files,
+        folder,
+        cursor: 0,
+        done: 0,
+        failed: 0,
+        pending: 0,
+        active: new Map(),
+        concurrency,
+        stopped: false
+    });
+    fillDriveDownloads(tabId);
+    sendResponse({ ok: true, total: files.length, folder, concurrency });
+}
+
 // Runtime message listeners
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'YT_GET_QUALITIES') {
@@ -901,6 +967,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else if (message.action === 'OPEN_LOGIN') {
         chrome.tabs.create({ url: chrome.runtime.getURL('pages/login.html') });
         sendResponse({ ok: true });
+    } else if (message.action === 'OPEN_LICENSE') {
+        rmOpenLicensePage();
+        sendResponse({ ok: true });
+    } else if (message.action === 'LICENSE_CHANGED') {
+        // The license page just activated, deactivated or re-checked a key.
+        refreshLicenseMenus().then(licensed => sendResponse({ ok: true, licensed }));
+        return true;
+    } else if (message.action === 'GET_LICENSE_STATE') {
+        rmGetLicenseState({ force: !!message.force }).then(sendResponse);
+        return true;
     } else if (message.action === 'START_DRIVE_VIDEO_QUEUE') {
         const tabId = sender.tab?.id;
         const files = Array.isArray(message.files) ? message.files.filter(file => file?.id) : [];
@@ -908,21 +984,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({ ok: false, error: 'No Drive media files were found.' });
             return;
         }
-        const folder = driveSafeFolder(message.folder);
-        const concurrency = driveConcurrency(message.concurrency);
-        driveDownloadJobs.set(tabId, {
-            files,
-            folder,
-            cursor: 0,
-            done: 0,
-            failed: 0,
-            pending: 0,
-            active: new Map(),
-            concurrency,
-            stopped: false
+        rmIsLicensed().then(licensed => {
+            if (!licensed) return sendResponse({ ok: false, error: 'license' });
+            startDriveQueue(tabId, message, files, sendResponse);
         });
-        fillDriveDownloads(tabId);
-        sendResponse({ ok: true, total: files.length, folder, concurrency });
+        return true;
     } else if (message.action === 'STOP_DRIVE_VIDEO_QUEUE') {
         const tabId = sender.tab?.id;
         const job = driveDownloadJobs.get(tabId);

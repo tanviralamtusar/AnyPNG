@@ -25,7 +25,7 @@
     let panelOpen = false;
     let selectedKind = 'mp4';
     let selectedHeight = 1080;
-    let pageInfo = { isSignedIn: true, maxHeight: null, isLive: false };
+    let pageInfo = { isSignedIn: true, isLicensed: true, licenseMessage: null, maxHeight: null, isLive: false };
     const jobs = new Map();
 
     function isVideoPage() {
@@ -162,6 +162,7 @@
                     <div class="error" aria-live="polite"></div>
                     <button type="button" class="primary" data-download>Download</button>
                     <button type="button" class="primary" data-signin hidden>Sign in to download</button>
+                    <button type="button" class="primary" data-license hidden>Activate your license</button>
                     <div class="jobs" aria-live="polite"></div>
                 </div>
                 <button type="button" class="fab" aria-haspopup="dialog" aria-expanded="false"
@@ -195,6 +196,9 @@
         $('[data-download]').addEventListener('click', startDownload);
         $('[data-signin]').addEventListener('click', () => {
             chrome.runtime.sendMessage({ action: 'OPEN_LOGIN' }).catch(() => {});
+        });
+        $('[data-license]').addEventListener('click', () => {
+            chrome.runtime.sendMessage({ action: 'OPEN_LICENSE' }).catch(() => {});
         });
 
         document.documentElement.appendChild(host);
@@ -234,7 +238,7 @@
 
     function renderChoices() {
         if (!shadow) return;
-        const { maxHeight, isLive, isSignedIn } = pageInfo;
+        const { maxHeight, isLive, isSignedIn, isLicensed, licenseMessage } = pageInfo;
 
         shadow.querySelectorAll('.tab').forEach((tab) => {
             tab.setAttribute('aria-pressed', String(tab.dataset.kind === selectedKind));
@@ -258,14 +262,17 @@
             note.textContent = "Live streams can't be downloaded.";
         } else if (!isSignedIn) {
             note.textContent = 'Sign in to your RightMate account to download videos.';
+        } else if (!isLicensed) {
+            note.textContent = licenseMessage || 'Activate your license to download videos.';
         } else {
             note.textContent = '';
         }
         note.hidden = !note.textContent;
 
-        $('[data-download]').hidden = !isSignedIn;
+        $('[data-download]').hidden = !isSignedIn || !isLicensed;
         $('[data-download]').disabled = isLive;
         $('[data-signin]').hidden = isSignedIn;
+        $('[data-license]').hidden = !isSignedIn || isLicensed;
     }
 
     async function startDownload() {
@@ -285,6 +292,8 @@
             });
             if (result?.error === 'signin') {
                 pageInfo = { ...pageInfo, isSignedIn: false };
+            } else if (result?.error === 'license') {
+                pageInfo = { ...pageInfo, isLicensed: false, licenseMessage: result.message };
             } else if (!result?.ok) {
                 $('.error').textContent = result?.error || 'Could not start the download.';
             }
@@ -326,9 +335,11 @@
                 height: job.height,
                 label: job.label,
             });
-            if (!result?.ok && shadow) $('.error').textContent = result?.error === 'signin'
-                ? 'Please sign in again.'
-                : (result?.error || 'Could not start the server download.');
+            if (!result?.ok && shadow) {
+                if (result?.error === 'signin') $('.error').textContent = 'Please sign in again.';
+                else if (result?.error === 'license') $('.error').textContent = result.message;
+                else $('.error').textContent = result?.error || 'Could not start the server download.';
+            }
         } catch {
             if (shadow) $('.error').textContent = 'The extension was updated. Reload this page and try again.';
         }

@@ -279,11 +279,9 @@ document.getElementById('themeToggle').addEventListener('change', async (e) => {
     await chrome.storage.local.set({ theme: isLight ? 'light' : 'dark' });
 });
 
-// 🔒 HARDCODED API CREDENTIALS (Matches background.js)
-const API_CONFIG = {
-    url: "https://anypng.botbhai.net",
-    basicToken: "my_super_secret_hostinger_token_123!"
-};
+// Reachability check only; the button treats any HTTP response as success, so
+// this never needed a credential.
+const API_CONFIG = { url: "https://anypng.botbhai.net" };
 
 // Test API Connection
 document.getElementById('testBtn').addEventListener('click', async () => {
@@ -295,10 +293,7 @@ document.getElementById('testBtn').addEventListener('click', async () => {
     testStatus.style.opacity = '1';
 
     try {
-        const response = await fetch(API_CONFIG.url, {
-            method: 'GET',
-            headers: { 'Authorization': `Bearer ${API_CONFIG.basicToken}` }
-        });
+        const response = await fetch(`${API_CONFIG.url}/ping`, { method: 'GET' });
 
         if (response.status === 200 || response.status === 405 || response.status === 404 || response.status === 401) {
             testStatus.innerText = '✅ Connection Successful!';

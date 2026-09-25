@@ -202,7 +202,16 @@
         activity = 'download'; stopRequested = false; setControls(true);
         setStatus(`Starting ${files.length} selected download${files.length === 1 ? '' : 's'}...`);
         const response = await chrome.runtime.sendMessage({ action: 'START_DRIVE_VIDEO_QUEUE', files, folder: destinationFolder, concurrency: downloadConcurrency });
-        if (!response?.ok) { activity = null; setControls(false); setStatus(response?.error || 'Could not start downloads.'); }
+        if (!response?.ok) {
+            activity = null;
+            setControls(false);
+            if (response?.error === 'license') {
+                setStatus('Activate your RightMate license to download from Drive.');
+                chrome.runtime.sendMessage({ action: 'OPEN_LICENSE' }).catch(() => {});
+            } else {
+                setStatus(response?.error || 'Could not start downloads.');
+            }
+        }
         else { destinationFolder = response.folder; downloadConcurrency = response.concurrency; }
     });
     stop.addEventListener('click', async () => {

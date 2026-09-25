@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="../styles/global.css">
+    <link rel="stylesheet" href="../styles/auth.css">
+    <style>
+        .license-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px;
+            margin-bottom: 16px;
+            border-radius: var(--radius-sm);
+            background: var(--surface-2);
+            border: 1px solid var(--glass-border);
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+        .license-status.is-active { color: var(--success); background: rgba(16, 185, 129, 0.1); }
+        .license-status .dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: currentColor; flex: 0 0 auto;
+        }
+        .license-details { margin-bottom: 16px; font-size: 13px; color: var(--text-muted); }
+        .license-details div { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; }
+        .license-details span { color: var(--text); font-weight: 500; text-align: right; }
+        .license-details code {
+            font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+            letter-spacing: 0.04em;
+        }
+        #key { text-align: center; letter-spacing: 0.12em; font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+        .link-btn {
+            display: block; width: 100%; margin-top: 12px; padding: 10px;
+            background: none; border: 1px solid var(--glass-border); border-radius: var(--radius-sm);
+            color: var(--text-muted); font-size: 13px; cursor: pointer;
+            transition: color 0.2s ease, border-color 0.2s ease;
+        }
+        .link-btn:hover:not(:disabled) { color: var(--text); border-color: var(--text-muted); }
+        .link-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .hidden { display: none !important; }
+        .hint { font-size: 12px; color: var(--text-muted); text-align: center; margin-top: 14px; line-height: 1.5; }
+    </style>
+</head>
+<body class="animate-fade-in">
+    <div class="auth-container">
+
+        <div class="logo-wrapper">
+            <img src="../icons/Anypng.png" alt="RightMate Logo" style="width: 48px; height: 48px; margin-bottom: 1rem;">
+            <h1>RightMate</h1>
+        </div>
+
+        <div class="glass-effect auth-card">
+
+            <div id="status" class="license-status">
+                <span class="dot"></span>
+                <span id="status-text">Checking your license…</span>
+            </div>
+
+            <div id="details" class="license-details hidden">
+                <div>License key <span><code id="detail-key"></code></span></div>
+                <div>Active device <span id="detail-device"></span></div>
+                <div>Activated <span id="detail-activated"></span></div>
+            </div>
+
+            <div id="activate-form" class="hidden">
+                <div class="input-container">
+                    <input type="text" id="key" placeholder="RM-XXXX-XXXX-XXXX-XXXX"
+                           autocomplete="off" spellcheck="false" maxlength="22">
+                </div>
+
+                <div id="error-msg" class="error-message"></div>
+                <div id="success-msg" class="success-message"></div>
+
+                <button id="activate-btn" class="auth-btn">
+                    <span>Activate on this device</span>
+                </button>
+            </div>
+
+            <div id="signed-out" class="hidden">
+                <div id="signed-out-error" class="error-message"></div>
+                <button id="signin-btn" class="auth-btn"><span>Sign in</span></button>
+            </div>
+
+            <button id="deactivate-btn" class="link-btn hidden">Deactivate this device</button>
+            <button id="recheck-btn" class="link-btn">Re-check license</button>
+
+            <p class="hint">
+                One license works on one device at a time. Activating it elsewhere
+                releases this device; a key can only be moved once every 24 hours.
+            </p>
+
+            <a id="purchase-link" class="switch-link hidden" target="_blank" rel="noreferrer">
+                Need a key? <span>Get one</span>
+            </a>
+        </div>
+    </div>
+
+    <script src="../scripts/license.js"></script>
+    <script src="../scripts/license-page.js"></script>
+</body>
+</html>

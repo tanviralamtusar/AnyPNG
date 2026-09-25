@@ -63,8 +63,8 @@ document.getElementById('login-btn').onclick = async () => {
         }
         
         await chrome.storage.local.set({ supabaseSession: data });
-        // After successful login, navigate back to popup dashboard logic
-        window.location.href = "dashboard.html";
+        // popup.html routes on to the dashboard or the license page.
+        window.location.href = "popup.html";
     } catch (err) {
         if (err.name === 'TypeError' && err.message.includes('fetch')) {
             errorMsg.innerText = "Network error. Please check your connection.";
