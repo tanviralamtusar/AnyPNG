@@ -24,10 +24,11 @@ body {
   font-size: 17px;
   font-weight: 700;
   letter-spacing: -0.4px;
-  background: linear-gradient(135deg, var(--text) 0%, var(--text-muted) 140%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: var(--text);
+}
+
+.logo-container h2 .wordmark-accent {
+  color: var(--primary);
 }
 
 .logo {

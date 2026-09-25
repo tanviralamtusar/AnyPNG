@@ -22,14 +22,18 @@
   filter: drop-shadow(0 0 12px rgba(59, 130, 246, 0.4));
 }
 
+/* Two-tone wordmark: "Right" in the text colour, "Mate" in the logo's blue.
+   Solid colours, not a clipped gradient — text-fill-color: transparent would
+   swallow the accent span along with the rest. */
 .logo-wrapper h1 {
   font-size: 24px;
   font-weight: 800;
-  background: var(--primary-gradient);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: var(--text);
   letter-spacing: -0.5px;
+}
+
+.logo-wrapper h1 .wordmark-accent {
+  color: var(--primary);
 }
 
 .auth-card {
