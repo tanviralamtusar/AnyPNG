@@ -154,8 +154,8 @@ document.getElementById('verify-btn').onclick = async () => {
     const verifyBtn = document.getElementById('verify-btn');
     const originalBtnHTML = verifyBtn.innerHTML;
 
-    if (!/^\d{6,10}$/.test(token)) {
-        showError("Enter the code from the email");
+    if (!/^\d{6}$/.test(token)) {
+        showError("Enter the 6-digit code from the email");
         return;
     }
 

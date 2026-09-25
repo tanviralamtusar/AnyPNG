@@ -112,8 +112,8 @@ document.getElementById('set-password-btn').onclick = async () => {
     const setBtn = document.getElementById('set-password-btn');
     const originalBtnHTML = setBtn.innerHTML;
 
-    if (!/^\d{6,10}$/.test(token)) {
-        showError("Enter the code from the email");
+    if (!/^\d{6}$/.test(token)) {
+        showError("Enter the 6-digit code from the email");
         return;
     }
     if (password.length < 6) {
