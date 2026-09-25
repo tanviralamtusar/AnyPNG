@@ -105,3 +105,24 @@ body {
 .animate-fade-in {
   animation: fadeIn 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
+
+/* "Developed by oddbirds.dev" credit shown at the bottom of each page */
+.brand-credit {
+  display: block;
+  margin-top: 18px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.brand-credit strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.brand-credit:hover,
+.brand-credit:hover strong {
+  color: var(--primary);
+}
