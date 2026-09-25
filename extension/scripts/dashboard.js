@@ -149,6 +149,12 @@ async function showLicense() {
     const state = await rmGetLicenseState();
     const summary = document.getElementById('license-summary');
     const device = document.getElementById('license-device');
+
+    // The dot and tint stay neutral until the check resolves, so a slow network
+    // never flashes red at someone whose license is fine.
+    card.classList.toggle('is-ok', !!state.licensed);
+    card.classList.toggle('is-bad', !state.licensed);
+
     if (state.licensed) {
         summary.innerText = 'License active on this device';
         device.innerText = state.license?.masked_key || '';
