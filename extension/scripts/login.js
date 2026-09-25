@@ -51,6 +51,19 @@ document.getElementById('login-btn').onclick = async () => {
                     case 'invalid_grant':
                         errorMessage = "Invalid email or password";
                         break;
+                    case 'email_not_confirmed':
+                        // Best effort: the old code may still be valid if this is rate-limited.
+                        await fetch(`${SUPABASE_URL}/auth/v1/resend`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'apikey': SUPABASE_ANON_KEY,
+                                'x-client-info': 'anypng-extension'
+                            },
+                            body: JSON.stringify({ type: 'signup', email })
+                        }).catch(() => {});
+                        window.location.href = `signup.html?verify=${encodeURIComponent(email)}`;
+                        return;
                 }
             }
             throw new Error(errorMessage);
