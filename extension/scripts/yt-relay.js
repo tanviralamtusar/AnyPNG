@@ -157,12 +157,26 @@ function extractLinks(job, params) {
         ws.addEventListener('open', () => { opened = true; });
         // onerror carries no detail; onclose always follows it with the close code.
         ws.onclose = (event) => {
-            console.warn(`[RightMate] relay socket closed (opened=${opened}, code=${event.code}, reason=${event.reason || '-'})`);
+            if (settled) return;
+            console.warn(`[RightMate] relay socket closed early (opened=${opened}, code=${event.code}, reason=${event.reason || '-'})`);
             finish(reject, opened
                 ? new JobError('closed', `The server closed the connection (code ${event.code}).`)
                 : new JobError('connect', `Could not connect to the RightMate server (code ${event.code}).`));
         };
     });
+}
+
+// A socket that never opened (server restarting, network blip) is safe to retry: the
+// server hasn't started anything for it yet.
+async function extractLinksWithRetry(job, params) {
+    for (let attempt = 1; ; attempt++) {
+        try {
+            return await extractLinks(job, params);
+        } catch (error) {
+            if (!(error instanceof JobError) || error.code !== 'connect' || attempt >= 3 || job.abort.signal.aborted) throw error;
+            await sleep(1500 * attempt);
+        }
+    }
 }
 
 // ---- 2. download --------------------------------------------------------------------
@@ -291,7 +305,7 @@ async function runJob(params) {
     jobs.set(jobId, job);
     try {
         report(jobId, { status: 'extracting' });
-        const result = await extractLinks(job, params);
+        const result = await extractLinksWithRetry(job, params);
         const streams = result.streams || [];
         if (!streams.length || !streams.every(s => hostAllowed(s.url, MEDIA_HOSTS))) {
             throw new JobError('failed', 'The server returned unexpected download links.');
