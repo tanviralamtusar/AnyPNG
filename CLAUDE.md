@@ -35,6 +35,15 @@ Single-file FastAPI app exposing:
 - `POST /upscale`, `POST /remove-background` — gated by the static bearer `SECRET_TOKEN` (`verify_token`).
 - `POST /remove-watermark` — gated by `verify_watermark_token`, which accepts either the legacy static token OR a Supabase user JWT. When a Supabase JWT is used, it calls `_verify_supabase_user` (validates against Supabase Auth) then `_consume_inpaint_credit` (atomic compare-and-swap decrement against `profiles.credits` via the Supabase REST API using the service-role key, with retry on concurrent-write conflicts).
 - `POST /inpaint/authorize` — issues a short-lived signed permit (`_make_inpaint_permit`, HMAC via `INPAINT_PERMIT_SECRET`) after validating the Supabase session and consuming a credit, so the local WebGPU editor can prove it's allowed to run without ever uploading the image.
+- YouTube downloads (free, but require a Supabase session via `verify_signed_in_user`, which caches results for 60s because clients poll):
+  - `POST /youtube/jobs` `{url, kind: mp4|webm|mp3, height}` starts an in-memory `YoutubeJob`. yt-dlp runs in a thread, gated by a global semaphore (`YT_MAX_CONCURRENT`) and a limit of 2 active jobs per user.
+  - `GET /youtube/jobs/{id}` returns status and progress, and a signed `download_url` once the job is ready.
+  - `GET /youtube/file/{id}?t=` is authorized only by that HMAC token (the key is generated per process), so `chrome.downloads` can fetch it with no header. The job folder is deleted once the file is sent.
+  - `DELETE /youtube/jobs/{id}` cancels a job.
+  - Cleanup: a startup sweeper deletes jobs older than `YT_JOB_TTL_SECONDS`, and `YT_WORK_ROOT` is wiped on boot.
+  - Quality selection uses yt-dlp `format_sort` (`res:<h>`), so the closest quality at or below the request is picked.
+  - The Docker image needs `ffmpeg` and `deno`: yt-dlp-ejs uses Deno to solve YouTube's JS challenges.
+  - Jobs live in memory, so this requires a **single uvicorn worker**.
 
 Watermark removal on the server uses Gemini via `google-genai` (`run_gemini_image_edit`); background removal uses `rembg` (optional import — the app stays bootable without it). Image editing model choice is restricted to `ALLOWED_AI_MODELS`, which **must be kept in sync with the dropdown in `extension/pages/settings.html`**.
 
@@ -48,6 +57,10 @@ Manifest V3, no bundler — scripts are plain JS loaded directly by the manifest
 - `scripts/content.js` — runs on all pages; resolves the actual image URL under the cursor for the context-menu handler (`resolveContextImageUrlViaContentScript` in background.js messages this).
 - `scripts/offscreen.js` + `pages/offscreen.html` — an offscreen document (required because MV3 service workers have no DOM/canvas) that does local, on-device work: image format conversion (canvas + bundled libavif WASM for AVIF) and on-device background removal (via bundled transformers.js/onnxruntime-web models in `scripts/transformers/`).
 - `scripts/drive-downloader.js` — injected only on `drive.google.com`; scans a Drive folder page for media files and hands them to `background.js`'s Drive download queue.
+- `scripts/youtube-overlay.js` — injected on `youtube.com`; draws a shadow-DOM floating button and panel on watch/Shorts pages, handling YouTube's SPA navigation via `yt-navigate-finish` plus a 1s poll. It talks to `background.js`:
+  - `YT_GET_QUALITIES` reads `movie_player.getAvailableQualityLevels()` in the page's MAIN world via `chrome.scripting`, and greys out qualities above the video's maximum.
+  - `YT_START_DOWNLOAD` creates the server job; background.js polls it and pushes `YT_JOB_STATUS` to the tab, then hands the signed URL to `chrome.downloads`.
+  - `YT_CANCEL`, `YT_LIST_JOBS`, `YT_DISMISS_JOB` and `OPEN_LOGIN` handle cancelling, restoring jobs after a reload, dismissing finished jobs and opening the login page.
 - `pages/` + matching `scripts/*.js` — the extension's UI surfaces (popup, options/settings, login/signup/forgot-password, dashboard, user profile, processing status). Each auth-related page independently manages its own Supabase session refresh.
 - `inpaint/` — build output of the root Vite project (the WebGPU local inpainting editor). Present for historical/dev reasons; the shipped watermark-removal context-menu action calls the backend `/remove-watermark` endpoint directly and does not open this editor.
 

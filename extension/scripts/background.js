@@ -562,9 +562,216 @@ async function callWatermarkBackend(prompt, session, method = "standard", downlo
     }
 }
 
+// ==========================================
+// 🎬 YOUTUBE DOWNLOADS (server-side yt-dlp jobs)
+// ==========================================
+const YT_POLL_INTERVAL_MS = 1500;
+const YT_QUALITY_LEVELS = {
+    highres: 4320, hd2880: 2880, hd2160: 2160, hd1440: 1440, hd1080: 1080,
+    hd720: 720, large: 480, medium: 360, small: 240, tiny: 144
+};
+// jobId -> { tabId, label, kind, height, status, percent, error }
+const ytJobs = new Map();
+
+function notifyYoutubeJob(jobId) {
+    const job = ytJobs.get(jobId);
+    if (!job) return;
+    chrome.tabs.sendMessage(job.tabId, { action: 'YT_JOB_STATUS', jobId, ...job }).catch(() => {});
+}
+
+function ytJobsForTab(tabId) {
+    return [...ytJobs.entries()].filter(([, job]) => job.tabId === tabId).map(([jobId, job]) => ({ jobId, ...job }));
+}
+
+// Runs in the page's MAIN world: content scripts can't see YouTube's player API.
+function readYoutubePlayerQualities() {
+    try {
+        const player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+        const data = player?.getVideoData?.() || {};
+        return {
+            levels: player?.getAvailableQualityLevels?.() || [],
+            videoId: data.video_id || null,
+            isLive: !!data.isLive
+        };
+    } catch {
+        return { levels: [], videoId: null, isLive: false };
+    }
+}
+
+async function getYoutubeQualities(sender, expectedVideoId) {
+    const { supabaseSession } = await chrome.storage.local.get('supabaseSession');
+    const result = { isSignedIn: !!supabaseSession?.access_token, maxHeight: null, isLive: false };
+    try {
+        const [injection] = await chrome.scripting.executeScript({
+            target: { tabId: sender.tab.id, frameIds: [sender.frameId ?? 0] },
+            world: 'MAIN',
+            func: readYoutubePlayerQualities
+        });
+        const info = injection?.result;
+        // Right after SPA navigation the player can still describe the previous video;
+        // in that case report nothing and let every quality stay selectable.
+        if (info && (!expectedVideoId || info.videoId === expectedVideoId)) {
+            const heights = info.levels.map(level => YT_QUALITY_LEVELS[level]).filter(Boolean);
+            result.maxHeight = heights.length ? Math.max(...heights) : null;
+            result.isLive = info.isLive;
+        }
+    } catch (error) {
+        console.warn('[RightMate] Could not read YouTube player qualities', error);
+    }
+    return result;
+}
+
+async function ytApi(path, accessToken, options = {}) {
+    const response = await fetch(`${API_CONFIG.url}${path}`, {
+        ...options,
+        headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+            ...(options.headers || {})
+        }
+    });
+    let data = null;
+    try { data = await response.json(); } catch { /* empty body */ }
+    return { ok: response.ok, status: response.status, data };
+}
+
+function ytErrorMessage(result, fallback) {
+    const detail = result?.data?.detail;
+    if (typeof detail === 'string') return detail;
+    if (detail?.message) return detail.message;
+    return fallback;
+}
+
+async function pollYoutubeJob(jobId, accessToken) {
+    let token = accessToken;
+    while (ytJobs.has(jobId)) {
+        await new Promise(resolve => setTimeout(resolve, YT_POLL_INTERVAL_MS));
+        const job = ytJobs.get(jobId);
+        if (!job || job.status === 'cancelled') return;
+
+        let result;
+        try {
+            result = await ytApi(`/youtube/jobs/${jobId}`, token);
+            if (result.status === 401) {
+                // Access tokens expire after an hour; refresh once and retry.
+                const session = await getValidSession();
+                if (!session?.access_token) throw new Error('Your session expired. Please sign in again.');
+                token = session.access_token;
+                result = await ytApi(`/youtube/jobs/${jobId}`, token);
+            }
+        } catch (error) {
+            Object.assign(job, { status: 'error', error: error.message || 'Lost connection to the server.' });
+            notifyYoutubeJob(jobId);
+            return;
+        }
+
+        if (!result.ok) {
+            Object.assign(job, { status: 'error', error: ytErrorMessage(result, 'Download failed.') });
+            notifyYoutubeJob(jobId);
+            return;
+        }
+
+        const status = result.data;
+        Object.assign(job, { status: status.status, percent: status.percent || 0, error: status.error || null });
+
+        if (status.status === 'ready') {
+            try {
+                await chrome.downloads.download({
+                    url: `${API_CONFIG.url}${status.download_url}`,
+                    filename: driveSafeName(status.filename, 0),
+                    conflictAction: 'uniquify'
+                });
+                job.status = 'saved';
+            } catch (error) {
+                Object.assign(job, { status: 'error', error: 'Chrome could not start the download.' });
+            }
+            notifyYoutubeJob(jobId);
+            return;
+        }
+        notifyYoutubeJob(jobId);
+        if (status.status === 'error' || status.status === 'cancelled') return;
+    }
+}
+
+async function startYoutubeDownload(message, sender) {
+    const tabId = sender.tab?.id;
+    if (tabId === undefined) return { ok: false, error: 'No tab.' };
+
+    const session = await getValidSession();
+    if (!session?.access_token) return { ok: false, error: 'signin' };
+
+    const kind = ['mp4', 'webm', 'mp3'].includes(message.kind) ? message.kind : 'mp4';
+    const height = kind === 'mp3' ? null : (Number(message.height) || null);
+
+    let result;
+    try {
+        result = await ytApi('/youtube/jobs', session.access_token, {
+            method: 'POST',
+            body: JSON.stringify({ url: message.url, kind, height })
+        });
+    } catch {
+        return { ok: false, error: 'Could not reach the download server.' };
+    }
+    if (result.status === 401) return { ok: false, error: 'signin' };
+    if (!result.ok) return { ok: false, error: ytErrorMessage(result, 'Could not start the download.') };
+
+    const jobId = result.data.job_id;
+    ytJobs.set(jobId, {
+        tabId,
+        label: String(message.label || 'YouTube video').slice(0, 120),
+        kind,
+        height,
+        status: 'queued',
+        percent: 0,
+        error: null
+    });
+    notifyYoutubeJob(jobId);
+    withServiceWorkerKeepalive(pollYoutubeJob(jobId, session.access_token))
+        .catch(error => console.error('[RightMate] YouTube job polling failed', error));
+    return { ok: true, jobId };
+}
+
+async function cancelYoutubeDownload(jobId) {
+    const job = ytJobs.get(jobId);
+    if (!job) return { ok: false };
+    Object.assign(job, { status: 'cancelled', error: 'Download cancelled.' });
+    notifyYoutubeJob(jobId);
+    const session = await getValidSession();
+    if (session?.access_token) {
+        ytApi(`/youtube/jobs/${jobId}`, session.access_token, { method: 'DELETE' }).catch(() => {});
+    }
+    return { ok: true };
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+    for (const [jobId, job] of ytJobs) {
+        if (job.tabId === tabId && !['queued', 'downloading', 'processing'].includes(job.status)) ytJobs.delete(jobId);
+    }
+});
+
 // Runtime message listeners
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.action === 'START_DRIVE_VIDEO_QUEUE') {
+    if (message.action === 'YT_GET_QUALITIES') {
+        getYoutubeQualities(sender, message.videoId).then(sendResponse);
+        return true;
+    } else if (message.action === 'YT_START_DOWNLOAD') {
+        startYoutubeDownload(message, sender).then(sendResponse);
+        return true;
+    } else if (message.action === 'YT_CANCEL') {
+        cancelYoutubeDownload(message.jobId).then(sendResponse);
+        return true;
+    } else if (message.action === 'YT_LIST_JOBS') {
+        sendResponse({ jobs: ytJobsForTab(sender.tab?.id) });
+    } else if (message.action === 'YT_DISMISS_JOB') {
+        const job = ytJobs.get(message.jobId);
+        if (job && job.tabId === sender.tab?.id && !['queued', 'downloading', 'processing'].includes(job.status)) {
+            ytJobs.delete(message.jobId);
+        }
+        sendResponse({ ok: true });
+    } else if (message.action === 'OPEN_LOGIN') {
+        chrome.tabs.create({ url: chrome.runtime.getURL('pages/login.html') });
+        sendResponse({ ok: true });
+    } else if (message.action === 'START_DRIVE_VIDEO_QUEUE') {
         const tabId = sender.tab?.id;
         const files = Array.isArray(message.files) ? message.files.filter(file => file?.id) : [];
         if (tabId === undefined || !files.length) {

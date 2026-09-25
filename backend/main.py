@@ -5,18 +5,24 @@ import base64
 import hashlib
 import hmac
 import json
+import secrets
+import shutil
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from dataclasses import dataclass, field
 from io import BytesIO
+from typing import Literal
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, UploadFile, Depends, HTTPException, Form
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import Response, FileResponse
+from pydantic import BaseModel
 from starlette.background import BackgroundTask
 from PIL import Image
 
@@ -25,6 +31,15 @@ try:
 except ImportError:  # Keep the API bootable until image dependencies are installed.
     new_session = None
     rembg_remove = None
+
+try:
+    import yt_dlp
+    from yt_dlp.utils import DownloadCancelled
+except ImportError:  # Keep the API bootable without yt-dlp; /youtube/jobs returns 503.
+    yt_dlp = None
+
+    class DownloadCancelled(Exception):
+        pass
 
 # Load environment variables
 load_dotenv()
@@ -277,7 +292,7 @@ def run_gemini_image_edit(contents: bytes, mime_type: str, prompt: str, model: s
 
 # Bumped when the client-visible contract changes, so /ping can confirm what is
 # actually deployed instead of inferring it from download behaviour.
-API_FEATURES = ["cookie_auth", "local_inpaint_credits"]
+API_FEATURES = ["cookie_auth", "local_inpaint_credits", "youtube_download"]
 
 _background_session = None
 
@@ -372,3 +387,402 @@ async def remove_background_api(
         return run_gemini_image_edit(
             contents, mime_type, prompt, _resolve_model(model)
         )
+
+
+# 🎬 YOUTUBE DOWNLOAD
+#
+# Flow: POST /youtube/jobs starts a background yt-dlp job → the client polls
+# GET /youtube/jobs/{id} → when ready, the client downloads GET /youtube/file/{id}?t=...
+# directly (chrome.downloads), and the job folder is deleted once the file is sent.
+# Nothing is kept: a sweeper removes anything older than YT_JOB_TTL_SECONDS.
+
+YT_ALLOWED_HOSTS = ("youtube.com", "youtu.be")
+YT_WORK_ROOT = os.getenv("YT_WORK_ROOT", "/tmp/anypng_yt")
+YT_MAX_CONCURRENT = max(1, int(os.getenv("YT_MAX_CONCURRENT", "2")))
+YT_MAX_ACTIVE_PER_USER = 2
+YT_JOB_TTL_SECONDS = int(os.getenv("YT_JOB_TTL_SECONDS", "1800"))
+YT_SWEEP_INTERVAL_SECONDS = 300
+YT_FILE_TOKEN_TTL_SECONDS = 600
+YT_AUTH_CACHE_SECONDS = 60
+
+# Optional Netscape cookies file from a logged-in (throwaway) YouTube account, used to
+# get past "Sign in to confirm you're not a bot" on datacenter IPs.
+YTDLP_COOKIES_FILE = os.getenv("YTDLP_COOKIES_FILE", "/app/cookies/cookies.txt")
+# YouTube's SABR rollout leaves some player clients with no downloadable formats; the
+# working set changes over time, so it is tunable without a rebuild (e.g. "default,tv").
+YTDLP_PLAYER_CLIENTS = os.getenv("YTDLP_PLAYER_CLIENTS", "").strip()
+
+# Jobs live in memory only, so a per-process key is enough to sign download links.
+_YT_FILE_SECRET = secrets.token_bytes(32)
+
+YT_ACTIVE_STATUSES = ("queued", "downloading", "processing")
+
+AUTH_WALL_MARKERS = (
+    "sign in to confirm",
+    "confirm you're not a bot",
+    "this video is only available to",
+    "sign in to view",
+    "login required",
+    "private video",
+    "account cookies",
+)
+# YouTube uses typographic apostrophes (U+2019) in these messages.
+_QUOTE_TRANSLATION = str.maketrans({"‘": "'", "’": "'", "ʼ": "'", "“": '"', "”": '"'})
+
+
+@dataclass
+class YoutubeJob:
+    id: str
+    user_id: str
+    url: str
+    kind: str
+    height: int | None
+    dir: str
+    created_at: float = field(default_factory=time.time)
+    status: str = "queued"
+    percent: float = 0.0
+    filepath: str | None = None
+    filename: str | None = None
+    size: int | None = None
+    error: str | None = None
+    error_code: str | None = None
+    cancel: threading.Event = field(default_factory=threading.Event)
+
+
+class YoutubeJobRequest(BaseModel):
+    url: str
+    kind: Literal["mp4", "webm", "mp3"]
+    height: int | None = None
+
+
+YT_JOBS: dict[str, YoutubeJob] = {}
+_yt_semaphore: asyncio.Semaphore | None = None
+_yt_tasks: set[asyncio.Task] = set()
+_yt_auth_cache: dict[str, tuple[str, float]] = {}
+
+
+def _is_youtube_url(url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme not in ("http", "https") or not host:
+        return False
+    return any(host == h or host.endswith("." + h) for h in YT_ALLOWED_HOSTS)
+
+
+def _is_auth_wall(message: str) -> bool:
+    lowered = message.lower().translate(_QUOTE_TRANSLATION)
+    return any(marker in lowered for marker in AUTH_WALL_MARKERS)
+
+
+def _is_format_error(message: str) -> bool:
+    return "requested format is not available" in message.lower()
+
+
+def _ytdlp_base_opts(job: YoutubeJob) -> dict:
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+        "noplaylist": True,
+        "socket_timeout": 30,
+        "retries": 3,
+        "fragment_retries": 3,
+        "concurrent_fragment_downloads": 4,
+        "paths": {"home": job.dir, "temp": job.dir},
+    }
+    if YTDLP_PLAYER_CLIENTS:
+        clients = [c.strip() for c in YTDLP_PLAYER_CLIENTS.split(",") if c.strip()]
+        if clients:
+            opts["extractor_args"] = {"youtube": {"player_client": clients}}
+    if os.path.isfile(YTDLP_COOKIES_FILE):
+        # yt-dlp writes the jar back on close; a per-job copy avoids concurrent jobs
+        # racing on the shared file.
+        job_cookies = os.path.join(job.dir, ".cookies.txt")
+        shutil.copyfile(YTDLP_COOKIES_FILE, job_cookies)
+        opts["cookiefile"] = job_cookies
+    return opts
+
+
+def _ytdlp_format_opts(kind: str, height: int | None) -> dict:
+    if kind == "mp3":
+        return {
+            "format": "ba/b",
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }],
+        }
+    # format_sort picks the closest quality at or below the cap instead of failing
+    # when the exact height doesn't exist for this video.
+    ext_pref = "ext:mp4:m4a" if kind == "mp4" else "ext:webm:webm"
+    sort = [f"res:{height}", ext_pref] if height else [ext_pref]
+    return {"format": "bv*+ba/b", "format_sort": sort, "merge_output_format": kind}
+
+
+def _log_available_formats(job: YoutubeJob) -> None:
+    """Diagnostic only: a format error says nothing about why, so list what was offered."""
+    opts = _ytdlp_base_opts(job)
+    opts.update({"skip_download": True, "ignore_no_formats_error": True, "allow_unplayable_formats": True})
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(job.url, download=False) or {}
+    except Exception as e:
+        print(f"[youtube] could not list formats: {type(e).__name__}: {e}")
+        return
+    formats = info.get("formats") or []
+    print(f"[youtube] {len(formats)} raw format(s) offered (live={info.get('is_live')}):")
+    for f in formats:
+        print(f"    {f.get('format_id')} {f.get('ext')} {f.get('resolution') or f.get('format_note')} "
+              f"v={f.get('vcodec')} a={f.get('acodec')} proto={f.get('protocol')} drm={bool(f.get('has_drm'))}")
+
+
+def _run_youtube_download(job: YoutubeJob) -> None:
+    """Blocking; runs in a worker thread. Updates the job in place."""
+    finished_streams: set[str] = set()
+    skip_reason: list[str] = []
+
+    def progress_hook(d: dict) -> None:
+        if job.cancel.is_set():
+            raise DownloadCancelled("Cancelled by user")
+        info = d.get("info_dict") or {}
+        stream_count = len(info.get("requested_formats") or []) or 1
+        format_id = str(info.get("format_id"))
+        if d.get("status") == "downloading":
+            job.status = "downloading"
+            total = d.get("total_bytes") or d.get("total_bytes_estimate")
+            fraction = (d.get("downloaded_bytes") or 0) / total if total else 0.0
+            overall = (len(finished_streams) + min(fraction, 1.0)) / stream_count
+            job.percent = round(min(overall, 1.0) * 100, 1)
+        elif d.get("status") == "finished":
+            finished_streams.add(format_id)
+
+    def postprocessor_hook(d: dict) -> None:
+        if job.cancel.is_set():
+            raise DownloadCancelled("Cancelled by user")
+        if d.get("status") == "started":
+            job.status = "processing"
+            job.percent = 100.0
+
+    def match_filter(info: dict, *, incomplete: bool = False) -> str | None:
+        if info.get("is_live") or info.get("live_status") in ("is_live", "is_upcoming", "post_live"):
+            skip_reason.append("Live streams and premieres can't be downloaded.")
+            return skip_reason[-1]
+        return None
+
+    opts = _ytdlp_base_opts(job)
+    opts.update(_ytdlp_format_opts(job.kind, job.height))
+    opts.update({
+        "outtmpl": "%(title).150B [%(id)s].%(ext)s",
+        "progress_hooks": [progress_hook],
+        "postprocessor_hooks": [postprocessor_hook],
+        "match_filter": match_filter,
+    })
+
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(job.url, download=True) or {}
+
+    if skip_reason:
+        raise ValueError(skip_reason[0])
+
+    filepath = None
+    for entry in info.get("requested_downloads") or []:
+        if entry.get("filepath") and os.path.isfile(entry["filepath"]):
+            filepath = entry["filepath"]
+    if not filepath:
+        # Fallback: the job folder only ever holds this one download.
+        candidates = [
+            os.path.join(job.dir, name) for name in os.listdir(job.dir)
+            if not name.startswith(".") and not name.endswith((".part", ".ytdl"))
+        ]
+        filepath = max(candidates, key=os.path.getsize, default=None)
+    if not filepath:
+        raise RuntimeError("yt-dlp produced no output file")
+
+    job.filepath = filepath
+    job.filename = os.path.basename(filepath)
+    job.size = os.path.getsize(filepath)
+
+
+async def _run_youtube_job(job: YoutubeJob) -> None:
+    global _yt_semaphore
+    if _yt_semaphore is None:
+        _yt_semaphore = asyncio.Semaphore(YT_MAX_CONCURRENT)
+    async with _yt_semaphore:
+        if job.cancel.is_set():
+            shutil.rmtree(job.dir, ignore_errors=True)
+            return
+        try:
+            await asyncio.to_thread(_run_youtube_download, job)
+            if job.cancel.is_set():
+                raise DownloadCancelled("Cancelled by user")
+            job.status = "ready"
+            job.percent = 100.0
+            print(f"[youtube] job={job.id} ready file={job.filename!r} size={job.size}")
+        except Exception as e:
+            message = str(e)
+            if job.cancel.is_set() or isinstance(e, DownloadCancelled):
+                job.status, job.error_code, job.error = "cancelled", "cancelled", "Download cancelled."
+            elif isinstance(e, ValueError):
+                job.status, job.error_code, job.error = "error", "live", message
+            elif _is_auth_wall(message):
+                print(f"[youtube] job={job.id} auth wall (set YTDLP_COOKIES_FILE to a logged-in account): {message}")
+                job.status, job.error_code = "error", "auth_required"
+                job.error = "YouTube asked the server to sign in. The video may be private or age-restricted."
+            elif _is_format_error(message):
+                print(f"[youtube] job={job.id} no matching format: {message}")
+                await asyncio.to_thread(_log_available_formats, job)
+                job.status, job.error_code = "error", "no_formats"
+                job.error = "No downloadable format was available for this video."
+            else:
+                print(f"[youtube] job={job.id} failed: {type(e).__name__}: {message}")
+                job.status, job.error_code = "error", "failed"
+                job.error = "Could not download this video. It may be private, restricted, or removed."
+            shutil.rmtree(job.dir, ignore_errors=True)
+
+
+def _remove_youtube_job(job_id: str) -> None:
+    job = YT_JOBS.pop(job_id, None)
+    if job:
+        shutil.rmtree(job.dir, ignore_errors=True)
+
+
+def _make_file_token(job_id: str) -> str:
+    exp = int(time.time()) + YT_FILE_TOKEN_TTL_SECONDS
+    sig = hmac.new(_YT_FILE_SECRET, f"{job_id}.{exp}".encode(), hashlib.sha256).hexdigest()
+    return f"{exp}.{sig}"
+
+
+def _check_file_token(job_id: str, token: str) -> bool:
+    exp_str, _, sig = token.partition(".")
+    if not exp_str.isdigit() or int(exp_str) < time.time():
+        return False
+    expected = hmac.new(_YT_FILE_SECRET, f"{job_id}.{exp_str}".encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, sig)
+
+
+async def verify_signed_in_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
+    """Require a Supabase user session. Cached briefly because clients poll job status."""
+    token = credentials.credentials
+    key = hashlib.sha256(token.encode()).hexdigest()
+    cached = _yt_auth_cache.get(key)
+    now = time.time()
+    if cached and cached[1] > now:
+        return cached[0]
+    try:
+        user_id = await asyncio.to_thread(_verify_supabase_user, token)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="Please sign in again.") from exc
+    except RuntimeError as exc:
+        print(f"[youtube] auth check failed: {exc}")
+        raise HTTPException(status_code=401, detail="Please sign in again.") from exc
+    if len(_yt_auth_cache) > 5000:
+        _yt_auth_cache.clear()
+    _yt_auth_cache[key] = (user_id, now + YT_AUTH_CACHE_SECONDS)
+    return user_id
+
+
+def _job_status_payload(job: YoutubeJob) -> dict:
+    payload = {
+        "job_id": job.id,
+        "status": job.status,
+        "percent": job.percent,
+        "kind": job.kind,
+        "filename": job.filename,
+        "size": job.size,
+        "error": job.error,
+        "error_code": job.error_code,
+    }
+    if job.status == "ready":
+        payload["download_url"] = f"/youtube/file/{job.id}?t={_make_file_token(job.id)}"
+    return payload
+
+
+async def _sweep_youtube_jobs() -> None:
+    while True:
+        await asyncio.sleep(YT_SWEEP_INTERVAL_SECONDS)
+        cutoff = time.time() - YT_JOB_TTL_SECONDS
+        for job_id, job in list(YT_JOBS.items()):
+            if job.created_at < cutoff:
+                job.cancel.set()
+                if job.status not in YT_ACTIVE_STATUSES:
+                    print(f"[youtube] sweeping expired job={job_id} status={job.status}")
+                    _remove_youtube_job(job_id)
+
+
+@app.on_event("startup")
+async def _start_youtube_sweeper() -> None:
+    # Leftovers from a previous process can never be fetched again (jobs are in memory).
+    shutil.rmtree(YT_WORK_ROOT, ignore_errors=True)
+    os.makedirs(YT_WORK_ROOT, exist_ok=True)
+    task = asyncio.create_task(_sweep_youtube_jobs())
+    _yt_tasks.add(task)
+
+
+@app.post("/youtube/jobs")
+async def create_youtube_job(body: YoutubeJobRequest, user_id: str = Depends(verify_signed_in_user)):
+    if yt_dlp is None:
+        raise HTTPException(status_code=503, detail="Video downloads are not available on this server.")
+    url = body.url.strip()
+    if not _is_youtube_url(url):
+        raise HTTPException(status_code=400, detail="Only YouTube video URLs are supported.")
+    height = body.height if body.height and body.height > 0 else None
+
+    active = sum(1 for j in YT_JOBS.values() if j.user_id == user_id and j.status in YT_ACTIVE_STATUSES)
+    if active >= YT_MAX_ACTIVE_PER_USER:
+        raise HTTPException(status_code=429, detail="You already have downloads in progress. Please wait for them to finish.")
+
+    job_id = uuid.uuid4().hex
+    job_dir = os.path.join(YT_WORK_ROOT, job_id)
+    os.makedirs(job_dir, exist_ok=True)
+    job = YoutubeJob(id=job_id, user_id=user_id, url=url, kind=body.kind, height=height, dir=job_dir)
+    YT_JOBS[job_id] = job
+    print(f"[youtube] job={job_id} user={user_id} kind={job.kind} height={height} url={url!r}")
+
+    task = asyncio.create_task(_run_youtube_job(job))
+    _yt_tasks.add(task)
+    task.add_done_callback(_yt_tasks.discard)
+    return {"job_id": job_id}
+
+
+@app.get("/youtube/jobs/{job_id}")
+async def get_youtube_job(job_id: str, user_id: str = Depends(verify_signed_in_user)):
+    job = YT_JOBS.get(job_id)
+    if not job or job.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Download not found or expired.")
+    return _job_status_payload(job)
+
+
+@app.delete("/youtube/jobs/{job_id}")
+async def cancel_youtube_job(job_id: str, user_id: str = Depends(verify_signed_in_user)):
+    job = YT_JOBS.get(job_id)
+    if not job or job.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Download not found or expired.")
+    job.cancel.set()
+    if job.status in YT_ACTIVE_STATUSES:
+        # The worker thread notices the flag on its next progress tick and cleans up.
+        job.status, job.error_code, job.error = "cancelled", "cancelled", "Download cancelled."
+    else:
+        _remove_youtube_job(job_id)
+    return {"cancelled": True}
+
+
+@app.get("/youtube/file/{job_id}")
+async def get_youtube_file(job_id: str, t: str = ""):
+    # The signed short-lived token is the credential, so chrome.downloads can fetch
+    # this URL directly without an Authorization header.
+    if not _check_file_token(job_id, t):
+        raise HTTPException(status_code=403, detail="Download link is invalid or expired.")
+    job = YT_JOBS.get(job_id)
+    if not job or job.status != "ready" or not job.filepath or not os.path.isfile(job.filepath):
+        raise HTTPException(status_code=404, detail="Download not found or expired.")
+    media_types = {"mp4": "video/mp4", "webm": "video/webm", "mp3": "audio/mpeg"}
+    return FileResponse(
+        job.filepath,
+        media_type=media_types.get(job.kind, "application/octet-stream"),
+        filename=job.filename,
+        background=BackgroundTask(_remove_youtube_job, job_id),
+    )

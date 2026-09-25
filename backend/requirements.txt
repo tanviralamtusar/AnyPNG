@@ -6,3 +6,5 @@ python-dotenv
 Pillow
 rembg
 onnxruntime
+# Rebuild the image regularly: YouTube changes break older yt-dlp releases.
+yt-dlp[default]

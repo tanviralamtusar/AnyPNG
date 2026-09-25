@@ -18,6 +18,7 @@
   PNG and WebP use the browser's canvas encoder; AVIF uses a bundled libavif (WASM) build, since Chrome's canvas cannot encode AVIF.
   Transparency is preserved in all three. Quality for the lossy formats is configurable in Settings.
 - **Google Drive Folder Downloads**: On a Google Drive folder page, use the AnyPNG panel to scan for common image and video formats and download each file separately to `Downloads/Drive media`, with progress, stop controls, and large-file confirmation support.
+- **YouTube Downloads**: On a YouTube video or Shorts page, a floating download button lets signed-in users pick **MP4** or **WebM** (up to 4K) or **MP3** audio. The backend downloads the video with yt-dlp, then Chrome saves the file directly. Nothing is kept on the server after the file is sent.
 - **Loading Overlay**: A beautiful glass-morphism loading screen appears during AI processing to keep you informed.
 - **API Connection Tester**: Easily verify your server connection directly from the settings page.
 - **Modern UI**: A premium, glassmorphism-inspired settings page for easy configuration.
