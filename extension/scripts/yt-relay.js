@@ -153,8 +153,15 @@ function extractLinks(job, params) {
                 finish(reject, new JobError(message.code, message.message));
             }
         };
-        ws.onerror = () => finish(reject, new JobError('connect', 'Could not connect to the RightMate server.'));
-        ws.onclose = () => finish(reject, new JobError('closed', 'The server closed the connection.'));
+        let opened = false;
+        ws.addEventListener('open', () => { opened = true; });
+        // onerror carries no detail; onclose always follows it with the close code.
+        ws.onclose = (event) => {
+            console.warn(`[RightMate] relay socket closed (opened=${opened}, code=${event.code}, reason=${event.reason || '-'})`);
+            finish(reject, opened
+                ? new JobError('closed', `The server closed the connection (code ${event.code}).`)
+                : new JobError('connect', `Could not connect to the RightMate server (code ${event.code}).`));
+        };
     });
 }
 
