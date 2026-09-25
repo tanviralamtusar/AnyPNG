@@ -281,7 +281,7 @@ document.getElementById('themeToggle').addEventListener('change', async (e) => {
 
 // Reachability check only; the button treats any HTTP response as success, so
 // this never needed a credential.
-const API_CONFIG = { url: "https://anypng.botbhai.net" };
+const API_CONFIG = { url: "https://rightmate-api.oddbirds.dev" };
 
 // Test API Connection
 document.getElementById('testBtn').addEventListener('click', async () => {

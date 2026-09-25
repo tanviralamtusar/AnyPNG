@@ -8,7 +8,7 @@
 // boundary — a determined user can edit extension storage — but it is what makes
 // "one account, one active device" hold for normal use.
 
-const RIGHTMATE_API_URL = "https://anypng.botbhai.net";
+const RIGHTMATE_API_URL = "https://rightmate-api.oddbirds.dev";
 const RM_SUPABASE_URL = "https://yknravxmhhwgwccflefc.supabase.co";
 const RM_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlrbnJhdnhtaGh3Z3djY2ZsZWZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDE1NzksImV4cCI6MjA4NzYxNzU3OX0.8crtZn3ZHqqaCg0VKLuhSzjNv0Kxf9vPolAfCwB_edI";
 

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "RightMate",
-  "version": "2.4.21",
+  "version": "2.4.22",
   "description": "Right-click images to convert, upscale, or remove backgrounds and watermarks — powered by self-hosted AI backend.",
   "permissions": [
     "contextMenus",
