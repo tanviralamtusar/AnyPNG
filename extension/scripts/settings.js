@@ -29,31 +29,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // Load sync settings
-    chrome.storage.sync.get(['upscaleFactor', 'conversionQuality', 'defaultVideoQuality', 'showYoutubeButton', 'driveDownloadFolder', 'driveDownloadConcurrency'], (result) => {
+    chrome.storage.sync.get(['upscaleFactor', 'conversionQuality', 'driveDownloadFolder', 'driveDownloadConcurrency'], (result) => {
         if (result.upscaleFactor) {
             document.getElementById('upscaleFactor').value = result.upscaleFactor;
         }
         if (result.conversionQuality) {
             document.getElementById('conversionQuality').value = result.conversionQuality;
         }
-        if (result.defaultVideoQuality) {
-            document.getElementById('defaultVideoQuality').value = result.defaultVideoQuality;
-        }
-        // Absent means "never configured", and this one is on by default.
-        document.getElementById('showYoutubeButton').checked = result.showYoutubeButton !== false;
         document.getElementById('driveDownloadFolder').value = result.driveDownloadFolder || 'Drive media';
         document.getElementById('driveDownloadConcurrency').value = ['1', '2', '3', '4', '5'].includes(String(result.driveDownloadConcurrency)) ? String(result.driveDownloadConcurrency) : '3';
     });
-
-    // Cookie-assisted retries are enabled unless the user explicitly opts out.
-    // The permission check keeps the UI accurate after an extension update.
-    (async () => {
-        const { enableCookieAuth } = await chrome.storage.local.get('enableCookieAuth');
-        const granted = await chrome.permissions.contains({ permissions: ['cookies'] });
-        // Cookie-assisted retries are on unless the user explicitly opts out.
-        const on = enableCookieAuth !== false && granted;
-        document.getElementById('enableCookieAuth').checked = on;
-    })();
 
     // Load local settings (theme)
     chrome.storage.local.get(['theme', 'supabaseSession'], async (data) => {
@@ -283,33 +268,6 @@ document.getElementById('updateProfileBtn')?.addEventListener('click', async () 
     }
 });
 
-// Cookie auth toggle. Deliberately NOT part of the saveBtn batch: requesting an
-// optional permission needs a real user gesture, which only exists inside this
-// handler. Stored in storage.local rather than sync because the permission grant is
-// per-device — a synced flag would read "on" where it was never granted.
-document.getElementById('enableCookieAuth')?.addEventListener('change', async (e) => {
-    const status = document.getElementById('cookieAuthStatus');
-    const checkbox = e.target;
-
-    if (checkbox.checked) {
-        const granted = await chrome.permissions.contains({ permissions: ['cookies'] });
-        if (!granted) {
-            checkbox.checked = false;
-            status.innerText = 'Permission declined — leaving this off.';
-            status.style.color = 'var(--text-muted)';
-            return;
-        }
-        await chrome.storage.local.set({ enableCookieAuth: true });
-        status.innerText = 'On. Your YouTube cookies will be sent only when a server download hits a sign-in wall.';
-        status.style.color = 'var(--accent)';
-        return;
-    }
-
-    await chrome.storage.local.set({ enableCookieAuth: false });
-    status.innerText = 'Off. Cookies will never be sent.';
-    status.style.color = 'var(--text-muted)';
-});
-
 // Theme toggle
 document.getElementById('themeToggle').addEventListener('change', async (e) => {
     const isLight = e.target.checked;
@@ -362,12 +320,10 @@ document.getElementById('testBtn').addEventListener('click', async () => {
 document.getElementById('saveBtn').addEventListener('click', () => {
     const upscaleFactor = document.getElementById('upscaleFactor').value;
     const conversionQuality = document.getElementById('conversionQuality').value;
-    const defaultVideoQuality = document.getElementById('defaultVideoQuality').value;
-    const showYoutubeButton = document.getElementById('showYoutubeButton').checked;
     const driveDownloadFolder = document.getElementById('driveDownloadFolder').value;
     const driveDownloadConcurrency = document.getElementById('driveDownloadConcurrency').value;
 
-    chrome.storage.sync.set({ upscaleFactor, conversionQuality, defaultVideoQuality, showYoutubeButton, driveDownloadFolder, driveDownloadConcurrency }, () => {
+    chrome.storage.sync.set({ upscaleFactor, conversionQuality, driveDownloadFolder, driveDownloadConcurrency }, () => {
         const status = document.getElementById('status');
         status.classList.add('show');
 

@@ -3,7 +3,6 @@ uvicorn
 python-multipart
 google-genai
 python-dotenv
-yt-dlp
 Pillow
 rembg
 onnxruntime

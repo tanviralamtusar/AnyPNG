@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "RightMate",
-  "version": "2.4.13",
-  "description": "Right-click images to convert or upscale, or right-click videos to download them — powered by self-hosted AI backend.",
+  "version": "2.4.14",
+  "description": "Right-click images to convert, upscale, or remove backgrounds and watermarks — powered by self-hosted AI backend.",
   "permissions": [
     "contextMenus",
     "downloads",
@@ -10,9 +10,7 @@
     "scripting",
     "storage",
     "notifications",
-    "offscreen",
-    "webRequest",
-    "cookies"
+    "offscreen"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -28,15 +26,6 @@
       "js": [
         "scripts/content.js"
       ]
-    },
-    {
-      "matches": [
-        "*://*.youtube.com/*"
-      ],
-      "js": [
-        "scripts/youtube-fab.js"
-      ],
-      "run_at": "document_idle"
     },
     {
       "matches": [

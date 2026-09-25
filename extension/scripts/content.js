@@ -22,10 +22,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else if (message.action === "HIDE_LOADING") {
         const loader = document.getElementById("anypng-loading-overlay");
         if (loader) loader.remove();
-    } else if (message.action === "GET_VIDEO_SRC") {
-        const video = document.querySelector("video");
-        sendResponse({ src: video ? video.currentSrc : null });
-        return true;
     } else if (message.action === "GET_IMAGE_AT_POINT") {
         const x = Number.isFinite(message.x) ? message.x : window.innerWidth / 2;
         const y = Number.isFinite(message.y) ? message.y : window.innerHeight / 2;
@@ -63,22 +59,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return { url: match?.[1], area: box.width * box.height };
         }).filter(item => item.url && item.area > 1024).sort((a, b) => b.area - a.area);
         sendResponse({ srcs: backgrounds[0]?.url ? [new URL(backgrounds[0].url, location.href).href] : [] });
-        return true;
-    } else if (message.action === "NUDGE_VIDEO_PLAYBACK") {
-        const video = document.querySelector("video");
-        if (!video) {
-            sendResponse({ ok: false });
-            return true;
-        }
-        const wasMuted = video.muted;
-        const wasPaused = video.paused;
-        video.muted = true;
-        video.play().catch(() => { });
-        setTimeout(() => {
-            if (wasPaused) video.pause();
-            video.muted = wasMuted;
-            sendResponse({ ok: true });
-        }, 1200);
         return true;
     }
 });

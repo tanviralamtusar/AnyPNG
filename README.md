@@ -6,7 +6,7 @@
   </a>
 </p>
 
-**AnyPNG** is a professional Chrome Extension that gives you a powerful image and video toolset directly in your browser's right-click menu. Convert and upscale images or download supported videos using your own self-hosted AI backend.
+**AnyPNG** is a professional Chrome Extension that gives you a powerful image toolset directly in your browser's right-click menu. Convert, upscale, and remove backgrounds using your own self-hosted AI backend.
 
 **Try it out today!** 🚀
 
