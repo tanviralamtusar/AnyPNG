@@ -30,7 +30,9 @@ Backend (`backend/`, Python/FastAPI):
 - Docker: `docker build -t anypng-backend backend/` then run with the env vars below.
 - No test suite exists for the backend.
 
-Extension: no build step. Load `extension/` directly via `chrome://extensions` → Developer mode → "Load unpacked". After editing `extension/scripts/background.js` or `manifest.json`, reload the extension in `chrome://extensions`.
+Extension: no build step for development. Load `extension/` directly via `chrome://extensions` → Developer mode → "Load unpacked". After editing `extension/scripts/background.js` or `manifest.json`, reload the extension in `chrome://extensions`.
+- `npm run build:ext` (`scripts/build-extension.mjs`) — the store build. Copies `extension/` into `dist/extension/` with our own `scripts/*.js` and `styles/*.css` minified by esbuild, and drops `inpaint/`, `assets/`, zips and the orphan pages. Vendored code (`scripts/transformers/`, `vendor/`, `avif_enc.js`) is copied unchanged. Add `-- --zip` for `dist/rightmate-<version>.zip`.
+- Classic scripts are minified with no `format`, so their top-level names survive; `license.js`'s globals depend on that. Only `<script type="module">` files (listed in `MODULE_SCRIPTS`) get `format: 'esm'` — update that set if you add one.
 
 ## Backend architecture (`backend/`)
 

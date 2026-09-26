@@ -11,3 +11,6 @@ YoutubeDownloader.win-x64/
 public/models/*.onnx
 extension/inpaint/models/*.onnx
 *.tsbuildinfo
+
+# Minified extension build
+dist/
