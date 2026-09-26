@@ -9,6 +9,15 @@ async function loadTheme() {
     }
 }
 
+// The popup closes as soon as the user switches to their inbox for the reset
+// code, so the reset flow runs in a tab. Already in a tab: navigate in place.
+document.querySelector('.forgot-link').onclick = async (e) => {
+    if (await chrome.tabs.getCurrent()) return;
+    e.preventDefault();
+    await chrome.tabs.create({ url: chrome.runtime.getURL('pages/forgot-password.html') });
+    window.close();
+};
+
 document.getElementById('login-btn').onclick = async () => {
     const email = document.getElementById('email').value.trim();
     const password = document.getElementById('password').value;

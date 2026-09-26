@@ -18,3 +18,7 @@ dist/
 # Extension signing key (decides the extension ID; never commit) and packed builds
 *.pem
 *.crx
+
+# Source export of the landing page design (copied into landing/)
+landing/RightMate-website-files/
+landing/RightMate-website-files.zip

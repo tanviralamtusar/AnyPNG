@@ -5,9 +5,9 @@ importScripts('license.js');
 // Local (offscreen-canvas) image conversion targets. `download_<key>` is the
 // context-menu id for each; `lossy` decides whether the saved quality setting applies.
 const IMAGE_FORMATS = {
-    png:  { name: "PNG",  label: "Convert to PNG (Local)",  mimeType: "image/png",  ext: "png",  lossy: false },
-    webp: { name: "WebP", label: "Convert to WebP (Local)", mimeType: "image/webp", ext: "webp", lossy: true },
-    avif: { name: "AVIF", label: "Convert to AVIF (Local)", mimeType: "image/avif", ext: "avif", lossy: true },
+    png:  { name: "PNG",  label: "Convert to PNG",  mimeType: "image/png",  ext: "png",  lossy: false },
+    webp: { name: "WebP", label: "Convert to WebP", mimeType: "image/webp", ext: "webp", lossy: true },
+    avif: { name: "AVIF", label: "Convert to AVIF", mimeType: "image/avif", ext: "avif", lossy: true },
 };
 
 // Quality passed to the canvas encoder for lossy targets. 1 makes Chrome pick
