@@ -239,3 +239,20 @@
   color: var(--text-muted);
   cursor: default;
 }
+
+/* Opened as a full tab (e.g. from the right-click menu) rather than the 360px
+   popup: drop the popup sizing and center the card. The popup's viewport is
+   always its body width, so this never matches inside the popup. */
+@media (min-width: 480px) {
+  html { overflow: auto; }
+  body {
+    width: auto;
+    max-height: none;
+    min-height: 100vh;
+    overflow: auto;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  .auth-container { width: 100%; max-width: 400px; }
+}
