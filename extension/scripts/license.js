@@ -317,3 +317,40 @@ function rmFormatKeyInput(value) {
     const groups = cleaned.slice(0, 16).match(/.{1,4}/g) || [];
     return groups.length ? ['RM', ...groups].join('-') : '';
 }
+
+// Authentication pages share this script. Add an accessible show/hide control
+// without duplicating the same behavior across login, signup and reset flows.
+if (typeof document !== 'undefined') {
+    const setupPasswordToggles = () => {
+        document.querySelectorAll('input[type="password"]').forEach(input => {
+            if (input.parentElement?.querySelector('.password-toggle')) return;
+
+            input.classList.add('password-input');
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'password-toggle';
+            button.setAttribute('aria-label', 'Show password');
+            button.setAttribute('aria-pressed', 'false');
+
+            const render = visible => {
+                button.innerHTML = visible
+                    ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18M10.6 10.7a2 2 0 0 0 2.7 2.7M9.9 4.2A10.8 10.8 0 0 1 12 4c5.5 0 9 5 9 5a15.8 15.8 0 0 1-2.2 2.7M6.6 6.6C4.4 8.1 3 10 3 10s3.5 5 9 5a10.8 10.8 0 0 0 3.4-.5"/></svg>'
+                    : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>';
+            };
+
+            render(false);
+            button.addEventListener('click', () => {
+                const visible = input.type === 'password';
+                input.type = visible ? 'text' : 'password';
+                button.setAttribute('aria-label', visible ? 'Hide password' : 'Show password');
+                button.setAttribute('aria-pressed', String(visible));
+                render(visible);
+                input.focus({ preventScroll: true });
+            });
+            input.parentElement.appendChild(button);
+        });
+    };
+
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setupPasswordToggles);
+    else setupPasswordToggles();
+}

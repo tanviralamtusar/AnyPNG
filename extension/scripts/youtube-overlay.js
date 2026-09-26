@@ -63,6 +63,8 @@
         /* applyPosition() flips these so the panel opens toward the roomier side. */
         .wrap.down { flex-direction: column-reverse; }
         .wrap.left { align-items: flex-start; }
+        .wrap:has(.panel:not([hidden])) { bottom: 40px; }
+        .wrap:has(.panel:not([hidden])) .fab { display: none; }
         .fab {
             touch-action: none;
             position: relative; width: 52px; height: 52px; border-radius: 50%; border: none;
@@ -81,20 +83,24 @@
         .fab.busy .dot { display: block; }
 
         .panel {
-            width: 530px; background: radial-gradient(80% 60% at 95% 0%,rgba(39,100,255,.15),transparent 62%), #070b12; color: #f5f7fb;
+            width: 560px; background: radial-gradient(80% 60% at 95% 0%,rgba(39,100,255,.15),transparent 62%), #070b12; color: #f5f7fb;
             border: 1px solid #25334a; border-radius: 24px; padding: 26px;
             box-shadow: 0 18px 45px rgba(0,0,0,.34); display: flex; flex-direction: column; gap: 16px;
             font-size: 14px;
         }
         .panel[hidden] { display: none; }
+        .brand { display:flex; align-items:center; gap:11px; margin:-4px -26px 4px; padding:0 26px 20px; border-bottom:1px solid rgba(118,146,190,.18); }
+        .brand img { width:40px; height:40px; border-radius:11px; }
+        .brand strong { font-size:24px; letter-spacing:-.8px; }.brand span { color:#3d82ff; }
         .title { color: #f5f7fb; font-size: 27px; line-height:1.1; font-weight: 700; letter-spacing: -.75px; text-transform: none; margin-top: 3px; }
         .title:after { content:'Choose format and quality to download this video.'; display:block; margin-top:10px; color:#a8b4c8; font-size:15px; letter-spacing:0; font-weight:400; }
         .tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; background: #0e1623; padding: 0; border: 1px solid #31425f; border-radius: 15px; overflow:hidden; position:relative; margin-top:27px; }
         .tabs:before { content:'FORMAT'; position:absolute; top:-25px; left:0; color:#9fb1d4; font-size:11px; font-weight:700; letter-spacing:.16em; }
         .tab {
             appearance: none; border: none; border-right:1px solid rgba(118,146,190,.18); background: transparent; color: #a8b4c8; font: inherit; font-weight: 600;
-            height: 57px; padding: 7px 0; border-radius: 0; cursor: pointer;
+            height: 57px; padding: 7px 0; border-radius: 0; cursor: pointer; display:flex; align-items:center; justify-content:center; gap:9px;
         }
+        .tab svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
         .tab:last-child { border-right:0; }.tab[aria-pressed="true"] { background: linear-gradient(180deg,#2f7bff,#1e5fff); color: #fff; box-shadow:0 8px 22px rgba(32,94,255,.24); }
         .qualities { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; position:relative; margin-top:27px; }
         .qualities:before { content:'QUALITY'; position:absolute; top:-25px; left:0; color:#9fb1d4; font-size:11px; font-weight:700; letter-spacing:.16em; }
@@ -102,7 +108,9 @@
         .q {
             appearance: none; height:84px; border: 1px solid #31415c; background: #0e1623; color: #f5f7fb;
             font: inherit; font-size:17px; font-weight:600; padding: 7px 0; border-radius: 14px; cursor: pointer;
+            display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px;
         }
+        .q strong { font:inherit; font-weight:600; }.q small { color:#8293b0; font-size:12px; font-weight:400; }
         .q:hover:not(:disabled) { border-color: #3d82ff; }
         .q[aria-pressed="true"] { border: 2px solid #3d82ff; background: rgba(39,100,255,.11); color: #fff; box-shadow:0 0 0 1px rgba(39,100,255,.15),0 8px 24px rgba(39,100,255,.15); }
         .q:disabled { opacity: .35; cursor: not-allowed; }
@@ -112,6 +120,7 @@
             appearance: none; height:58px; border: 1px solid rgba(255,255,255,.08); background: linear-gradient(180deg,#2f7bff,#1e5fff); color: #fff; font: inherit; font-size:16px; font-weight: 600;
             padding: 10px; border-radius: 14px; cursor: pointer; box-shadow:0 8px 22px rgba(32,94,255,.24);
         }
+        .primary svg { width:23px; height:23px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; vertical-align:middle; margin-right:10px; }
         .primary:hover:not(:disabled) { filter:brightness(1.08); transform:translateY(-1px); }
         .primary:disabled { opacity: .5; cursor: not-allowed; }
         .primary[hidden] { display: none; }
@@ -172,12 +181,13 @@
             <style>${STYLES}</style>
             <div class="wrap">
                 <div class="panel" hidden role="dialog" aria-label="Download video">
-                    <div class="title">Download video</div>
+                    <div class="brand"><img src="${chrome.runtime.getURL('icons/Anypng.png')}" alt=""><strong>Right<span>Mate</span></strong></div>
+                    <div class="title">Download Video</div>
                     <div class="tabs" role="group" aria-label="Format"></div>
                     <div class="qualities" role="group" aria-label="Quality"></div>
                     <div class="note" data-note hidden></div>
                     <div class="error" aria-live="polite"></div>
-                    <button type="button" class="primary" data-download>Download</button>
+                    <button type="button" class="primary" data-download><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14"/></svg>Download</button>
                     <button type="button" class="primary" data-signin hidden>Sign in to download</button>
                     <button type="button" class="primary" data-license hidden>Activate your license</button>
                     <div class="jobs" aria-live="polite"></div>
@@ -188,23 +198,30 @@
             </div>`;
 
         const tabs = $('.tabs');
+        const kindIcons = {
+            mp4: '<svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M10 12l5 3-5 3v-6Z"/></svg>',
+            webm: '<svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M10 12l5 3-5 3v-6Z"/></svg>',
+            mp3: '<svg viewBox="0 0 24 24"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg>'
+        };
         KINDS.forEach(({ id, label }) => {
             const tab = document.createElement('button');
             tab.type = 'button';
             tab.className = 'tab';
             tab.dataset.kind = id;
-            tab.textContent = label;
+            tab.innerHTML = `${kindIcons[id]}<span>${label}</span>`;
             tab.addEventListener('click', () => { selectedKind = id; renderChoices(); });
             tabs.appendChild(tab);
         });
 
         const qualities = $('.qualities');
+        const dimensions = { 2160: '3840 × 2160', 1440: '2560 × 1440', 1080: '1920 × 1080', 720: '1280 × 720', 480: '854 × 480', 360: '640 × 360' };
         HEIGHTS.forEach((height) => {
             const q = document.createElement('button');
             q.type = 'button';
             q.className = 'q';
             q.dataset.height = String(height);
-            q.textContent = height >= 2160 ? '4K' : height === 1440 ? '2K' : `${height}p`;
+            const qualityLabel = height >= 2160 ? '4K' : height === 1440 ? '2K' : `${height}p`;
+            q.innerHTML = `<strong>${qualityLabel}</strong><small>${dimensions[height]}</small>`;
             q.addEventListener('click', () => { selectedHeight = height; renderChoices(); });
             qualities.appendChild(q);
         });

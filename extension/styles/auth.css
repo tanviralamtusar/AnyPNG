@@ -1,18 +1,47 @@
+html {
+  width: 430px;
+  min-width: 430px;
+  max-width: 430px;
+  overflow-x: hidden;
+  background: var(--bg-app);
+}
+
+body {
+  width: 430px;
+  min-width: 430px;
+  max-width: 430px;
+  min-height: 585px;
+  margin: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: radial-gradient(80% 55% at 90% 0%, rgba(36,74,135,.14), transparent 63%), var(--bg-app);
+}
+
 .auth-container {
+  width: 430px;
+  min-width: 430px;
   display: flex;
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  min-height: 500px;
-  padding: 24px;
+  min-height: 585px;
+  padding: 30px 36px 24px;
 }
 
 .logo-wrapper {
-  margin-bottom: 32px;
+  margin-bottom: 24px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+}
+
+.logo-wrapper img {
+  width: 54px !important;
+  height: 54px !important;
+  margin-bottom: 8px !important;
+  border-radius: 15px;
+  box-shadow: 0 10px 28px rgba(39,100,255,.18);
 }
 
 .logo-wrapper svg {
@@ -26,8 +55,9 @@
    Solid colours, not a clipped gradient — text-fill-color: transparent would
    swallow the accent span along with the rest. */
 .logo-wrapper h1 {
-  font-size: 24px;
-  font-weight: 800;
+  margin: 0;
+  font-size: 26px;
+  font-weight: 700;
   color: var(--text);
   letter-spacing: -0.5px;
 }
@@ -41,6 +71,10 @@
   padding: 24px;
   position: relative;
   overflow: hidden;
+  background: linear-gradient(180deg, rgba(20,30,47,.96), rgba(11,17,27,.96));
+  border: 1px solid rgba(95,125,170,.23);
+  border-radius: 18px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.02), 0 18px 45px rgba(0,0,0,.22);
 }
 
 .auth-card::before {
@@ -64,6 +98,7 @@
   width: 100%;
   background: var(--input-bg);
   border: 1px solid var(--input-border);
+  min-height: 54px;
   border-radius: 12px;
   padding: 14px 16px;
   padding-left: 42px;
@@ -98,9 +133,52 @@
   color: var(--primary);
 }
 
+.input-container .password-input {
+  padding-right: 50px;
+}
+
+.password-toggle {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: 8px;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: color 160ms ease, background 160ms ease;
+}
+
+.password-toggle:hover {
+  color: var(--text-primary);
+  background: rgba(255,255,255,.05);
+}
+
+.password-toggle[aria-pressed="true"] {
+  color: var(--blue-light);
+}
+
+.password-toggle svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .auth-btn {
   width: 100%;
-  background: var(--primary-gradient);
+  min-height: 56px;
+  background: linear-gradient(180deg,#2f7bff 0%,#1e5fff 100%);
   color: white;
   border: none;
   padding: 14px;
@@ -114,7 +192,7 @@
   gap: 8px;
   margin-top: 24px;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
-  box-shadow: 0 4px 14px 0 rgba(59, 130, 246, 0.39);
+  box-shadow: 0 8px 22px rgba(32,94,255,.24), inset 0 1px 0 rgba(255,255,255,.1);
 }
 
 .auth-btn:hover:not(:disabled) {
@@ -244,9 +322,16 @@
    popup: drop the popup sizing and center the card. The popup's viewport is
    always its body width, so this never matches inside the popup. */
 @media (min-width: 480px) {
-  html { overflow: auto; }
+  html {
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    overflow: auto;
+  }
   body {
     width: auto;
+    min-width: 0;
+    max-width: none;
     max-height: none;
     min-height: 100vh;
     overflow: auto;
@@ -254,5 +339,9 @@
     justify-content: center;
     align-items: center;
   }
-  .auth-container { width: 100%; max-width: 400px; }
+  .auth-container { width: 100%; min-width: 0; max-width: 430px; }
+}
+
+.auth-container > .brand-credit {
+  margin-top: 18px;
 }

@@ -18,7 +18,7 @@ document.querySelector('.forgot-link').onclick = async (e) => {
     window.close();
 };
 
-document.getElementById('login-btn').onclick = async () => {
+async function submitLogin() {
     const email = document.getElementById('email').value.trim();
     const password = document.getElementById('password').value;
     const errorMsg = document.getElementById('error-msg');
@@ -77,4 +77,10 @@ document.getElementById('login-btn').onclick = async () => {
         loginBtn.disabled = false;
         loginBtn.innerHTML = originalBtnHTML;
     }
-};
+}
+
+document.getElementById('login-form').addEventListener('submit', event => {
+    event.preventDefault();
+    const loginBtn = document.getElementById('login-btn');
+    if (!loginBtn.disabled) submitLogin();
+});
