@@ -290,6 +290,11 @@ function rowHtml(row) {
   const badges = '<span class="pill ' + escapeHtml(row.status) + '">' + escapeHtml(row.status) + '</span>'
     + (row.account_banned ? ' <span class="pill banned">banned</span>' : '');
   const hasAccount = !!row.user_id;
+  const keyActions = row.status === 'revoked'
+    ? (hasAccount ? '<button class="small primary" data-act="restore" title="Give the key back to ' + escapeHtml(account) + '">Restore</button> ' : '')
+      + '<button class="small" data-act="recycle" title="Wipe the account and history; anyone can redeem it">Recycle</button> '
+    : '<button class="small" data-act="release">Unbind device</button> '
+      + '<button class="small danger" data-act="revoke">Revoke key</button> ';
 
   return '<tr data-key="' + escapeHtml(row.key) + '" data-user="' + escapeHtml(row.user_id || '') + '">'
     + '<td class="nowrap"><code>' + escapeHtml(row.key) + '</code>'
@@ -301,8 +306,7 @@ function rowHtml(row) {
     + '<td>' + device + '</td>'
     + '<td class="nowrap muted">' + fmtDate(row.last_seen_at) + '</td>'
     + '<td class="nowrap">'
-      + '<button class="small" data-act="release"' + (row.status === 'revoked' ? ' disabled' : '') + '>Unbind device</button> '
-      + '<button class="small danger" data-act="revoke"' + (row.status === 'revoked' ? ' disabled' : '') + '>Revoke key</button> '
+      + keyActions
       + '<button class="small" data-act="ban"' + (hasAccount ? '' : ' disabled') + '>'
         + (row.account_banned ? 'Unban account' : 'Ban account') + '</button>'
     + '</td>'
@@ -395,7 +399,9 @@ $('rows').addEventListener('click', async (event) => {
   const key = tr.dataset.key;
   const act = button.dataset.act;
 
-  if (act === 'revoke' && !confirm('Revoke ' + key + ' permanently?\n\nThe user loses access within a day and the key can never be reactivated from here.')) return;
+  if (act === 'revoke' && !confirm('Revoke ' + key + '?\n\nThe user loses access within a day. You can restore or recycle the key later.')) return;
+  if (act === 'restore' && !confirm('Restore ' + key + ' to ' + tr.children[2].textContent.trim() + '?\n\nThey enter the key in the extension again to activate it.')) return;
+  if (act === 'recycle' && !confirm('Recycle ' + key + ' as a fresh unclaimed key?\n\nIt is detached from its account and anyone holding the key can redeem it.')) return;
   if (act === 'ban' && !confirm(button.textContent.trim() + ' for the account holding ' + key + '?')) return;
 
   button.disabled = true;
@@ -406,6 +412,11 @@ $('rows').addEventListener('click', async (event) => {
     } else if (act === 'revoke') {
       await api('/license/admin/revoke', { method: 'POST', body: JSON.stringify({ key }) });
       flash('Key revoked.', true);
+    } else if (act === 'restore' || act === 'recycle') {
+      await api('/license/admin/reuse', { method: 'POST', body: JSON.stringify({ key, keep_account: act === 'restore' }) });
+      flash(act === 'restore'
+        ? 'Key restored; the user can activate it in the extension again.'
+        : 'Key recycled; it is now unclaimed.', true);
     } else {
       const banning = button.textContent.trim().startsWith('Ban');
       await api('/license/admin/ban', { method: 'POST', body: JSON.stringify({ user_id: tr.dataset.user, banned: banning }) });

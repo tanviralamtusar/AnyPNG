@@ -296,6 +296,25 @@ def admin_revoke(key: str, note: str | None) -> dict:
     return {"status": "revoked", "key": result.get("key")}
 
 
+def admin_reuse(key: str, keep_account: bool, note: str | None) -> dict:
+    """Bring a revoked key back: `keep_account` restores it to the account that
+    held it; otherwise it is wiped back to an unclaimed key anyone can redeem."""
+    result = _unwrap(rpc("admin_reuse_license", {"p_key": key, "p_keep_account": keep_account, "p_note": note}))
+    status = result.get("status")
+    if status == "not_found":
+        raise LicenseError("not_found", "No license with that key.", 404)
+    if status == "not_revoked":
+        raise LicenseError("not_revoked", "That key is not revoked.", 409)
+    if status == "already_licensed":
+        raise LicenseError(
+            "already_licensed",
+            f"That account already holds {result.get('key')}. Revoke it first, or recycle this key instead.",
+            409,
+            {"key": result.get("key")},
+        )
+    return {"status": result.get("license_status"), "key": result.get("key")}
+
+
 def admin_release(key: str, note: str | None) -> dict:
     """Unbind the device and clear the cooldown, so the user can activate now."""
     result = _unwrap(rpc("admin_release_license", {"p_key": key, "p_note": note}))

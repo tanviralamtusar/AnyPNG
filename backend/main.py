@@ -513,6 +513,12 @@ class LicenseKeyRequest(BaseModel):
     note: str | None = None
 
 
+class LicenseReuseRequest(BaseModel):
+    key: str
+    keep_account: bool = True
+    note: str | None = None
+
+
 class LicenseBanRequest(BaseModel):
     user_id: str
     banned: bool = True
@@ -626,7 +632,7 @@ async def license_admin_issue(body: LicenseIssueRequest):
 
 @app.post("/license/admin/revoke", dependencies=[Depends(verify_admin_token)])
 async def license_admin_revoke(body: LicenseKeyRequest):
-    """Permanently disable a key. There is no un-revoke here on purpose."""
+    """Disable a key; POST /license/admin/reuse brings it back."""
     try:
         return await asyncio.to_thread(licensing.admin_revoke, body.key, body.note)
     except licensing.LicenseError as exc:
@@ -634,6 +640,17 @@ async def license_admin_revoke(body: LicenseKeyRequest):
     except RuntimeError as exc:
         print(f"[license] admin revoke failed: {exc}")
         raise HTTPException(status_code=503, detail="Could not revoke that key.") from exc
+
+
+@app.post("/license/admin/reuse", dependencies=[Depends(verify_admin_token)])
+async def license_admin_reuse(body: LicenseReuseRequest):
+    try:
+        return await asyncio.to_thread(licensing.admin_reuse, body.key, body.keep_account, body.note)
+    except licensing.LicenseError as exc:
+        raise _license_http_error(exc) from exc
+    except RuntimeError as exc:
+        print(f"[license] admin reuse failed: {exc}")
+        raise HTTPException(status_code=503, detail="Could not reuse that key.") from exc
 
 
 @app.post("/license/admin/release", dependencies=[Depends(verify_admin_token)])
