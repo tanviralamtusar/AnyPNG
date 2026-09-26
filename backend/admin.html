@@ -75,11 +75,12 @@
 
   <div id="gate" class="gate card">
     <h1>RightMate Licenses</h1>
-    <p>Paste the admin token (the backend's <code>SECRET_TOKEN</code>). It is kept in this tab only.</p>
-    <div class="row">
-      <input type="password" id="token" placeholder="Admin token" style="flex:1" autocomplete="off">
-      <button class="primary" id="unlock">Unlock</button>
-    </div>
+    <p>Sign in with the admin account. The session is kept in this tab only.</p>
+    <form id="login-form" style="display:grid;gap:8px">
+      <input type="text" id="username" placeholder="Username" autocomplete="username" required>
+      <input type="password" id="password" placeholder="Password" autocomplete="current-password" required>
+      <button class="primary" id="unlock" type="submit">Sign in</button>
+    </form>
     <div id="gate-msg" class="msg err" style="margin-top:12px"></div>
   </div>
 
@@ -88,7 +89,7 @@
       <h1>RightMate Licenses</h1>
       <span class="sub" id="count"></span>
       <span class="spacer"></span>
-      <button class="small" id="lock">Lock</button>
+      <button class="small" id="lock">Sign out</button>
     </header>
 
     <div id="msg" class="msg"></div>
@@ -175,7 +176,7 @@ async function api(path, options = {}) {
   try { data = await res.json(); } catch { /* empty body */ }
   if (res.status === 401) {
     lock();
-    throw new Error('That token was rejected.');
+    throw new Error('Your session expired. Sign in again.');
   }
   if (!res.ok) {
     const detail = data && data.detail;
@@ -198,12 +199,26 @@ function lock() {
   $('gate').classList.remove('hidden');
 }
 
-$('unlock').onclick = async () => {
-  token = $('token').value.trim();
-  if (!token) return;
+$('login-form').onsubmit = async (event) => {
+  event.preventDefault();
+  const username = $('username').value.trim();
+  const password = $('password').value;
+  if (!username || !password) return;
   $('unlock').disabled = true;
   try {
-    await api('/license/admin/licenses?limit=1');
+    const res = await fetch('/license/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    let data = null;
+    try { data = await res.json(); } catch { /* empty body */ }
+    if (!res.ok) {
+      const detail = data && data.detail;
+      throw new Error(typeof detail === 'string' ? detail : 'Sign-in failed (' + res.status + ').');
+    }
+    token = data.token;
+    $('password').value = '';
     $('gate-msg').className = 'msg err';
     unlock();
   } catch (error) {
@@ -212,7 +227,6 @@ $('unlock').onclick = async () => {
   }
   $('unlock').disabled = false;
 };
-$('token').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('unlock').click(); });
 $('lock').onclick = lock;
 
 function fmtDate(value) {

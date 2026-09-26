@@ -65,7 +65,7 @@ Routes:
   - The Docker image needs `ffmpeg` and `deno`: yt-dlp-ejs uses Deno to solve YouTube's JS challenges.
   - Jobs live in memory, so this requires a **single uvicorn worker**.
 
-Auth dependencies, in increasing strictness: `verify_signed_in_user` (valid Supabase JWT) → `verify_licensed_device` (that, plus a valid `X-License` entitlement) → `verify_admin_token` (the static `SECRET_TOKEN`; server-to-server and the admin panel only). Verified access tokens are cached for `AUTH_CACHE_SECONDS` (60) in `_auth_cache`.
+Auth dependencies, in increasing strictness: `verify_signed_in_user` (valid Supabase JWT) → `verify_licensed_device` (that, plus a valid `X-License` entitlement) → `verify_admin_token` (the static `SECRET_TOKEN` for server-to-server calls, or an `adm.<exp>.<sig>` session token from `POST /license/admin/login`, HMAC-signed with `SECRET_TOKEN`). Verified access tokens are cached for `AUTH_CACHE_SECONDS` (60) in `_auth_cache`.
 
 Upscaling uses Gemini via `google-genai` (`run_gemini_image_edit`); background removal uses `rembg` (optional import — the app stays bootable without it) and falls back to Gemini. Model choice is restricted to `ALLOWED_AI_MODELS`, but the extension no longer sends a `model` field and `settings.html` has no model dropdown, so `DEFAULT_AI_MODEL` is always what runs.
 
@@ -86,7 +86,7 @@ One key per purchase, claimed by one account, active on **one device at a time**
 
 ### Admin panel
 
-`GET /admin` serves `backend/admin.html`. The page is unauthenticated HTML holding no secrets; the operator pastes `SECRET_TOKEN` into it and it lives in that tab's `sessionStorage`. Every action calls a `verify_admin_token`-gated endpoint.
+`GET /admin` serves `backend/admin.html`. The page is unauthenticated HTML holding no secrets; the operator signs in with `ADMIN_USERNAME`/`ADMIN_PASSWORD` via `POST /license/admin/login` (failures rate-limited per client address, in memory), and the returned session token (`ADMIN_SESSION_TTL_SECONDS`, 12h) lives in that tab's `sessionStorage`. Rotating `SECRET_TOKEN` invalidates all sessions. Every action calls a `verify_admin_token`-gated endpoint.
 
 Two tabs:
 - **Licenses** — `GET /license/admin/licenses` (search by key, buyer email, account email, order id or device label), with `GET /license/admin/events` behind each row's *History* disclosure.

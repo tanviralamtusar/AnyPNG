@@ -57,6 +57,10 @@ security = HTTPBearer()
 
 # 🛑 CONFIGURATION
 SECRET_TOKEN = os.getenv("SECRET_TOKEN", "my_super_secret_hostinger_token_123!")
+# Admin panel sign-in. Both must be set, or POST /license/admin/login refuses.
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+ADMIN_SESSION_TTL_SECONDS = int(os.getenv("ADMIN_SESSION_TTL_SECONDS", str(12 * 3600)))
 VERTEX_API_KEY = os.getenv("VERTEX_API_KEY")
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
 GOOGLE_CLOUD_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
@@ -93,12 +97,31 @@ elif GOOGLE_CLOUD_PROJECT:
 
 
 # 🔒 SECURITY MIDDLEWARE
+def _admin_session_signature(exp: int) -> str:
+    # Keyed on SECRET_TOKEN, so rotating it also signs out every admin session.
+    return hmac.new(SECRET_TOKEN.encode(), f"admin-session.{exp}".encode(), hashlib.sha256).hexdigest()
+
+
+def _make_admin_session() -> tuple[str, int]:
+    exp = int(time.time()) + ADMIN_SESSION_TTL_SECONDS
+    return f"adm.{exp}.{_admin_session_signature(exp)}", exp
+
+
+def _admin_session_ok(token: str) -> bool:
+    parts = token.split(".")
+    if len(parts) != 3 or parts[0] != "adm" or not parts[1].isdigit():
+        return False
+    exp = int(parts[1])
+    return exp > time.time() and hmac.compare_digest(_admin_session_signature(exp), parts[2])
+
+
 def verify_admin_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Server-to-server calls only. Rotate SECRET_TOKEN once the extension stops
-    shipping it, because every installed copy carries the current value."""
-    if not secrets.compare_digest(credentials.credentials, SECRET_TOKEN):
+    """The static SECRET_TOKEN (server-to-server) or a session token issued by
+    POST /license/admin/login (the admin panel)."""
+    token = credentials.credentials
+    if not (secrets.compare_digest(token, SECRET_TOKEN) or _admin_session_ok(token)):
         raise HTTPException(status_code=401, detail="Invalid Security Token")
-    return credentials.credentials
+    return token
 
 
 def _license_http_error(exc: "licensing.LicenseError") -> HTTPException:
@@ -505,12 +528,49 @@ ADMIN_PAGE = pathlib.Path(__file__).with_name("admin.html")
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page():
-    """The panel itself is public HTML; every action it performs needs the
-    admin bearer token, which the operator pastes in and the page keeps only in
-    sessionStorage."""
+    """The panel itself is public HTML; the operator signs in with
+    ADMIN_USERNAME/ADMIN_PASSWORD and the page keeps the resulting session
+    token only in sessionStorage."""
     if not ADMIN_PAGE.exists():
         raise HTTPException(status_code=404, detail="Admin page is not deployed.")
     return HTMLResponse(ADMIN_PAGE.read_text(encoding="utf-8"))
+
+
+class AdminLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+ADMIN_LOGIN_MAX_FAILURES = 10
+ADMIN_LOGIN_WINDOW_SECONDS = 15 * 60
+_admin_login_failures: dict[str, list[float]] = {}
+
+
+@app.post("/license/admin/login")
+async def admin_login(body: AdminLoginRequest, request: Request):
+    """Trades the admin username/password for a session token the panel sends
+    as its bearer token. Failed attempts are rate-limited per client address."""
+    if not (ADMIN_USERNAME and ADMIN_PASSWORD):
+        raise HTTPException(status_code=503, detail="Admin sign-in is not configured (set ADMIN_USERNAME and ADMIN_PASSWORD).")
+
+    client = request.client.host if request.client else "unknown"
+    now = time.time()
+    recent = [t for t in _admin_login_failures.get(client, []) if now - t < ADMIN_LOGIN_WINDOW_SECONDS]
+    if len(recent) >= ADMIN_LOGIN_MAX_FAILURES:
+        _admin_login_failures[client] = recent
+        raise HTTPException(status_code=429, detail="Too many failed sign-ins. Try again in a few minutes.")
+
+    user_ok = secrets.compare_digest(body.username.strip().encode(), ADMIN_USERNAME.encode())
+    pass_ok = secrets.compare_digest(body.password.encode(), ADMIN_PASSWORD.encode())
+    if not (user_ok and pass_ok):
+        recent.append(now)
+        _admin_login_failures[client] = recent
+        await asyncio.sleep(1)
+        raise HTTPException(status_code=401, detail="Wrong username or password.")
+
+    _admin_login_failures.pop(client, None)
+    token, exp = _make_admin_session()
+    return {"token": token, "expires_at": exp}
 
 
 EMAIL_LOGO = pathlib.Path(__file__).with_name("email-logo.png")
