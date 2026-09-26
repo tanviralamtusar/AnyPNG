@@ -1,16 +1,28 @@
 name: Package extension
 
+# Every push that touches the extension builds the minified zip (npm run build:ext).
+# A GitHub release is published once per manifest version: bump extension/manifest.json
+# to ship; pushes that don't bump it only produce a workflow artifact.
+# The public download is served from the VPS (landing/Dockerfile); this is a backup copy.
+
 on:
   push:
     branches:
       - main
-      - master
+    paths:
+      - 'extension/**'
+      - 'scripts/build-extension.mjs'
+      - '.github/workflows/package-extension.yml'
     tags:
       - 'v*'
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: package-extension-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   package:
@@ -19,6 +31,15 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Read extension version
         id: manifest
@@ -31,21 +52,14 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Create versioned ZIP
-        env:
-          VERSION: ${{ steps.manifest.outputs.version }}
-        run: |
-          mkdir -p dist
-          (
-            cd extension
-            zip -qr "../dist/RightMate-v${VERSION}.zip" .
-          )
+      - name: Build minified extension zip
+        run: npm run build:ext -- --zip
 
-      - name: Upload extension ZIP
+      - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RightMate-v${{ steps.manifest.outputs.version }}
-          path: dist/RightMate-v${{ steps.manifest.outputs.version }}.zip
+          name: rightmate-${{ steps.manifest.outputs.version }}
+          path: dist/rightmate-${{ steps.manifest.outputs.version }}.zip
           if-no-files-found: error
 
       - name: Create GitHub release
@@ -53,13 +67,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.manifest.outputs.version }}
-          ZIP_PATH: dist/RightMate-v${{ steps.manifest.outputs.version }}.zip
         run: |
           tag="v${VERSION}"
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag already exists; nothing to publish."
+            echo "Release $tag already exists; bump extension/manifest.json to publish a new one."
           else
-            gh release create "$tag" "$ZIP_PATH" \
+            gh release create "$tag" "dist/rightmate-${VERSION}.zip" \
               --target "$GITHUB_SHA" \
               --title "RightMate $tag" \
               --generate-notes

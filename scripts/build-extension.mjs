@@ -1,7 +1,7 @@
 // Builds a minified copy of extension/ into dist/extension/ for store upload.
 // The source folder stays unminified and loadable via "Load unpacked".
 // Usage: npm run build:ext            → dist/extension/
-//        npm run build:ext -- --zip   → also dist/rightmate-<version>.zip (Windows)
+//        npm run build:ext -- --zip   → also dist/rightmate-<version>.zip
 
 import { transform } from 'esbuild';
 import { execFileSync } from 'node:child_process';
@@ -84,10 +84,15 @@ async function main() {
     const { version } = JSON.parse(await fs.readFile(path.join(src, 'manifest.json'), 'utf8'));
     const zip = path.join(distRoot, `rightmate-${version}.zip`);
     await fs.rm(zip, { force: true });
-    execFileSync('powershell.exe', [
-      '-NoProfile', '-Command',
-      `Compress-Archive -Path '${out}\\*' -DestinationPath '${zip}'`,
-    ], { stdio: 'inherit' });
+    if (process.platform === 'win32') {
+      execFileSync('powershell.exe', [
+        '-NoProfile', '-Command',
+        `Compress-Archive -Path '${out}\\*' -DestinationPath '${zip}'`,
+      ], { stdio: 'inherit' });
+    } else {
+      // CI (Linux runners): Info-ZIP, run from inside out/ so paths are relative.
+      execFileSync('zip', ['-qr', zip, '.'], { cwd: out, stdio: 'inherit' });
+    }
     console.log(`Zip: ${path.relative(root, zip)}`);
   }
 }
