@@ -19,6 +19,11 @@
     ];
     const HEIGHTS = [2160, 1440, 1080, 720, 480, 360];
     const ACTIVE = ['extracting', 'queued', 'downloading', 'processing', 'ready'];
+    // The button is draggable; its spot is shared by every YouTube tab.
+    const POS_KEY = 'ytOverlayPosition';
+    const FAB_SIZE = 52;
+    const EDGE = 8;
+    const DRAG_THRESHOLD = 5;
 
     let host = null;
     let shadow = null;
@@ -26,6 +31,9 @@
     let selectedKind = 'mp4';
     let selectedHeight = 1080;
     let pageInfo = { isSignedIn: true, isLicensed: true, licenseMessage: null, maxHeight: null, isLive: false };
+    // Top-left corner of the button in viewport px; null means the default corner.
+    let fabPos = null;
+    let suppressClick = false;
     const jobs = new Map();
 
     function isVideoPage() {
@@ -52,13 +60,18 @@
             font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
             display: flex; flex-direction: column; align-items: flex-end; gap: 10px;
         }
+        /* applyPosition() flips these so the panel opens toward the roomier side. */
+        .wrap.down { flex-direction: column-reverse; }
+        .wrap.left { align-items: flex-start; }
         .fab {
+            touch-action: none;
             position: relative; width: 52px; height: 52px; border-radius: 50%; border: none;
             background: #10b981; color: #fff; cursor: pointer; padding: 0;
             display: flex; align-items: center; justify-content: center;
             box-shadow: 0 4px 14px rgba(0,0,0,.35); transition: transform .15s ease, background .15s ease;
         }
         .fab:hover { background: #0ea472; transform: scale(1.06); }
+        .fab.dragging { cursor: grabbing; transform: scale(1.1); transition: background .15s ease; }
         .fab:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
         .fab svg { width: 24px; height: 24px; display: block; }
         .fab .dot {
@@ -192,7 +205,11 @@
             qualities.appendChild(q);
         });
 
-        $('.fab').addEventListener('click', () => setPanel(!panelOpen));
+        $('.fab').addEventListener('click', () => {
+            if (suppressClick) { suppressClick = false; return; }
+            setPanel(!panelOpen);
+        });
+        enableDrag($('.fab'));
         $('[data-download]').addEventListener('click', startDownload);
         $('[data-signin]').addEventListener('click', () => {
             chrome.runtime.sendMessage({ action: 'OPEN_LOGIN' }).catch(() => {});
@@ -202,8 +219,74 @@
         });
 
         document.documentElement.appendChild(host);
+        applyPosition();
         renderChoices();
         renderJobs();
+    }
+
+    function clampPos({ x, y }) {
+        const maxX = Math.max(EDGE, window.innerWidth - FAB_SIZE - EDGE);
+        const maxY = Math.max(EDGE, window.innerHeight - FAB_SIZE - EDGE);
+        return { x: Math.min(Math.max(x, EDGE), maxX), y: Math.min(Math.max(y, EDGE), maxY) };
+    }
+
+    // Anchors the wrapper to the corner nearest the button, so the panel grows away
+    // from the screen edge instead of off it.
+    function applyPosition() {
+        if (!shadow) return;
+        const wrap = $('.wrap');
+        if (!fabPos) {
+            wrap.classList.remove('down', 'left');
+            wrap.style.cssText = '';
+            return;
+        }
+        const { x, y } = clampPos(fabPos);
+        const left = x + FAB_SIZE / 2 < window.innerWidth / 2;
+        const down = y + FAB_SIZE / 2 < window.innerHeight / 2;
+        wrap.classList.toggle('left', left);
+        wrap.classList.toggle('down', down);
+        wrap.style.left = left ? `${x}px` : 'auto';
+        wrap.style.right = left ? 'auto' : `${window.innerWidth - x - FAB_SIZE}px`;
+        wrap.style.top = down ? `${y}px` : 'auto';
+        wrap.style.bottom = down ? 'auto' : `${window.innerHeight - y - FAB_SIZE}px`;
+    }
+
+    function enableDrag(fab) {
+        let start = null;
+        let dragging = false;
+
+        fab.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0) return;
+            const rect = fab.getBoundingClientRect();
+            start = { px: e.clientX, py: e.clientY, x: rect.left, y: rect.top, id: e.pointerId };
+            dragging = false;
+        });
+        fab.addEventListener('pointermove', (e) => {
+            if (!start || e.pointerId !== start.id) return;
+            const dx = e.clientX - start.px;
+            const dy = e.clientY - start.py;
+            if (!dragging) {
+                if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+                dragging = true;
+                fab.setPointerCapture(e.pointerId);
+                fab.classList.add('dragging');
+                setPanel(false);
+            }
+            fabPos = clampPos({ x: start.x + dx, y: start.y + dy });
+            applyPosition();
+        });
+        const end = (e) => {
+            if (!start || e.pointerId !== start.id) return;
+            start = null;
+            if (!dragging) return;
+            dragging = false;
+            fab.classList.remove('dragging');
+            // The pointerup that ends a drag still fires a click on the button.
+            suppressClick = e.type === 'pointerup';
+            chrome.storage.local.set({ [POS_KEY]: fabPos }).catch(() => {});
+        };
+        fab.addEventListener('pointerup', end);
+        fab.addEventListener('pointercancel', end);
     }
 
     function destroy() {
@@ -442,6 +525,20 @@
     });
 
     document.addEventListener('fullscreenchange', sync);
+    window.addEventListener('resize', applyPosition);
+
+    function validPos(value) {
+        return value && Number.isFinite(value.x) && Number.isFinite(value.y) ? value : null;
+    }
+    chrome.storage.local.get(POS_KEY).then((stored) => {
+        fabPos = validPos(stored[POS_KEY]);
+        applyPosition();
+    }).catch(() => {});
+    chrome.storage.onChanged.addListener((changes, area) => {
+        if (area !== 'local' || !changes[POS_KEY]) return;
+        fabPos = validPos(changes[POS_KEY].newValue);
+        applyPosition();
+    });
     // YouTube's navigation event, plus a poll since the event name has changed over the
     // years; the poll also re-attaches the button if anything detached it.
     window.addEventListener('yt-navigate-finish', onNavigate);
