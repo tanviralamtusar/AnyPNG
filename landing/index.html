@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RightMate — image tools in your right-click menu</title>
+  <meta name="description" content="RightMate is a Chrome extension that puts image conversion, AI upscaling, background removal, YouTube and Google Drive downloads in your right-click menu.">
+  <link rel="icon" type="image/png" href="icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #08080b;
+      --bg-gradient: radial-gradient(120% 80% at 50% -10%, #1a1b26 0%, #0c0c11 45%, #08080b 100%);
+      --card-bg: rgba(255, 255, 255, 0.035);
+      --text: #f5f6fa;
+      --text-muted: #8b8d9c;
+      --primary: #3b82f6;
+      --primary-soft: rgba(59, 130, 246, 0.14);
+      --primary-gradient: linear-gradient(135deg, #2563eb 0%, #3b82f6 45%, #6366f1 100%);
+      --border: rgba(255, 255, 255, 0.09);
+      --shadow: 0 10px 40px -8px rgba(0, 0, 0, 0.55);
+      --radius: 16px;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f6f8fc;
+        --bg-gradient: radial-gradient(120% 80% at 50% -10%, #ffffff 0%, #eef2f8 60%, #e7ecf5 100%);
+        --card-bg: rgba(255, 255, 255, 0.85);
+        --text: #0f172a;
+        --text-muted: #64748b;
+        --primary-soft: rgba(59, 130, 246, 0.12);
+        --border: rgba(15, 23, 42, 0.08);
+        --shadow: 0 10px 40px -12px rgba(15, 23, 42, 0.18);
+      }
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      background-image: var(--bg-gradient);
+      background-attachment: fixed;
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: inherit; text-decoration: none; }
+
+    .container { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+
+    /* Nav */
+    nav { display: flex; align-items: center; justify-content: space-between; padding: 22px 0; }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 1.25rem; letter-spacing: -0.02em; }
+    .brand img { width: 32px; height: 32px; border-radius: 8px; }
+    .accent { color: var(--primary); }
+    nav .links { display: flex; gap: 24px; align-items: center; font-size: 0.95rem; color: var(--text-muted); }
+    nav .links a:hover { color: var(--text); }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 12px 22px; border-radius: 12px; font-weight: 600; font-size: 0.975rem;
+      transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+    }
+    .btn-primary { background: var(--primary-gradient); color: #fff; box-shadow: 0 8px 24px -8px rgba(59, 130, 246, 0.6); }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 12px 28px -8px rgba(59, 130, 246, 0.7); }
+    .btn-ghost { border: 1px solid var(--border); background: var(--card-bg); }
+    .btn-ghost:hover { border-color: var(--primary); }
+    .btn-sm { padding: 8px 16px; font-size: 0.9rem; }
+
+    /* Hero */
+    .hero { text-align: center; padding: 72px 0 56px; }
+    .pill {
+      display: inline-block; padding: 6px 14px; border-radius: 999px;
+      background: var(--primary-soft); color: var(--primary);
+      font-size: 0.85rem; font-weight: 600; margin-bottom: 22px;
+    }
+    .hero h1 { font-size: clamp(2.2rem, 6vw, 3.75rem); line-height: 1.1; letter-spacing: -0.035em; font-weight: 800; max-width: 780px; margin: 0 auto 20px; }
+    .hero p { font-size: 1.15rem; color: var(--text-muted); max-width: 600px; margin: 0 auto 34px; }
+    .hero .actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
+    /* Mock context menu */
+    .demo { display: flex; justify-content: center; margin-top: 56px; }
+    .menu {
+      width: 300px; max-width: 100%; text-align: left;
+      background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px;
+      box-shadow: var(--shadow); padding: 6px; backdrop-filter: blur(12px);
+    }
+    .menu .item { padding: 8px 12px; border-radius: 8px; font-size: 0.92rem; color: var(--text-muted); }
+    .menu .item.head { color: var(--text); font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .menu .item.head img { width: 16px; height: 16px; }
+    .menu .item.sub { padding-left: 36px; }
+    .menu .item.sub:hover, .menu .item.active { background: var(--primary-soft); color: var(--primary); }
+    .menu hr { border: 0; border-top: 1px solid var(--border); margin: 4px 0; }
+
+    /* Features */
+    section { padding: 64px 0; }
+    .section-title { text-align: center; margin-bottom: 40px; }
+    .section-title h2 { font-size: clamp(1.6rem, 4vw, 2.2rem); letter-spacing: -0.025em; font-weight: 800; margin-bottom: 8px; }
+    .section-title p { color: var(--text-muted); }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
+    .card {
+      background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 26px; box-shadow: var(--shadow);
+    }
+    .card .icon {
+      width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center;
+      background: var(--primary-soft); color: var(--primary); margin-bottom: 16px;
+    }
+    .card .icon svg { width: 22px; height: 22px; }
+    .card h3 { font-size: 1.1rem; margin-bottom: 6px; letter-spacing: -0.01em; }
+    .card p { color: var(--text-muted); font-size: 0.95rem; }
+
+    /* Steps */
+    .steps { counter-reset: step; }
+    .steps .card h3::before {
+      counter-increment: step; content: counter(step);
+      display: inline-grid; place-items: center; width: 28px; height: 28px; margin-right: 10px;
+      border-radius: 50%; background: var(--primary-gradient); color: #fff; font-size: 0.85rem;
+    }
+
+    /* CTA */
+    .cta {
+      text-align: center; padding: 48px 24px; border-radius: 24px;
+      background: var(--card-bg); border: 1px solid var(--border); box-shadow: var(--shadow);
+    }
+    .cta h2 { font-size: clamp(1.5rem, 4vw, 2rem); letter-spacing: -0.025em; margin-bottom: 10px; }
+    .cta p { color: var(--text-muted); margin-bottom: 26px; }
+
+    footer { padding: 40px 0; text-align: center; color: var(--text-muted); font-size: 0.9rem; }
+    footer strong { color: var(--text); }
+
+    @media (max-width: 600px) {
+      nav .links a:not(.btn) { display: none; }
+      .hero { padding-top: 40px; }
+      section { padding: 44px 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <nav>
+      <a href="#" class="brand"><img src="icon.png" alt=""><span>Right<span class="accent">Mate</span></span></a>
+      <div class="links">
+        <a href="#features">Features</a>
+        <a href="#how">How it works</a>
+        <a href="#get" class="btn btn-primary btn-sm">Get RightMate</a>
+      </div>
+    </nav>
+
+    <header class="hero">
+      <span class="pill">Chrome extension</span>
+      <h1>Every image tool you need, one <span class="accent">right-click</span> away.</h1>
+      <p>Convert, upscale and remove backgrounds from any image on the web — plus download YouTube videos and whole Google Drive folders. No tabs, no uploads to random sites.</p>
+      <div class="actions">
+        <a href="#get" class="btn btn-primary">Add to Chrome</a>
+        <a href="#features" class="btn btn-ghost">See features</a>
+      </div>
+
+      <div class="demo" aria-hidden="true">
+        <div class="menu">
+          <div class="item">Open image in new tab</div>
+          <div class="item">Save image as…</div>
+          <div class="item">Copy image</div>
+          <hr>
+          <div class="item head"><img src="icon.png" alt="">RightMate</div>
+          <div class="item sub">Download as PNG</div>
+          <div class="item sub">Download as WebP</div>
+          <div class="item sub">Download as AVIF</div>
+          <div class="item sub active">Upscale with AI</div>
+          <div class="item sub">Remove background</div>
+        </div>
+      </div>
+    </header>
+
+    <section id="features">
+      <div class="section-title">
+        <h2>Built for the way you browse</h2>
+        <p>Tools that show up exactly where you need them.</p>
+      </div>
+      <div class="grid">
+        <div class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></div>
+          <h3>Instant format conversion</h3>
+          <p>Save any image as PNG, WebP or AVIF. Conversion runs entirely on your device — nothing is uploaded.</p>
+        </div>
+        <div class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></div>
+          <h3>AI upscaling</h3>
+          <p>Turn small, blurry images into sharp, high-resolution versions with a single click.</p>
+        </div>
+        <div class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a8 8 0 0 1 16 0v1"/><path d="M2 2l20 20" opacity=".5"/></svg></div>
+          <h3>Background removal</h3>
+          <p>Cut out subjects cleanly. Runs on-device first, with a server fallback for tricky images.</p>
+        </div>
+        <div class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="3"/><polygon points="10 9 15 12 10 15 10 9" fill="currentColor"/></svg></div>
+          <h3>YouTube downloader</h3>
+          <p>A download button right on the video page. Pick MP4, WebM or MP3 at the quality you want.</p>
+        </div>
+        <div class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><polyline points="9 14 12 17 15 14"/></svg></div>
+          <h3>Google Drive folders</h3>
+          <p>Grab every image and video in a shared Drive folder at once, straight to your downloads.</p>
+        </div>
+        <div class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+          <h3>Private by design</h3>
+          <p>Local tools stay local. Server-side AI work stores nothing, and your account is yours alone.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="how">
+      <div class="section-title">
+        <h2>Up and running in a minute</h2>
+        <p>Three steps, then it just lives in your right-click menu.</p>
+      </div>
+      <div class="grid steps">
+        <div class="card">
+          <h3>Install</h3>
+          <p>Add RightMate to Chrome and pin it to your toolbar.</p>
+        </div>
+        <div class="card">
+          <h3>Sign in &amp; activate</h3>
+          <p>Create an account and enter your license key (<code>RM-XXXX-XXXX-XXXX-XXXX</code>).</p>
+        </div>
+        <div class="card">
+          <h3>Right-click anything</h3>
+          <p>Right-click any image — or open a YouTube or Drive page — and pick a tool.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="get">
+      <div class="cta">
+        <h2>Ready to make right-click do more?</h2>
+        <p>One license, one device at a time. Move it to a new machine whenever you need.</p>
+        <a href="#" class="btn btn-primary">Add to Chrome — it's quick</a>
+      </div>
+    </section>
+
+    <footer>
+      © <span id="year">2026</span> RightMate · Developed by <a href="https://oddbirds.dev" target="_blank" rel="noopener"><strong>oddbirds.dev</strong></a>
+    </footer>
+  </div>
+  <script>document.getElementById('year').textContent = new Date().getFullYear();</script>
+</body>
+</html>
