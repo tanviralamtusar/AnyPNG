@@ -22,7 +22,9 @@ EXPOSE 8000
 
 # Coolify's rolling update waits for .State.Health, which only exists when the
 # image defines a HEALTHCHECK. Python rather than curl: the slim image has no curl.
-HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+# A short interval so the container reports healthy within seconds of uvicorn
+# listening; Coolify gives up after a fixed number of attempts.
+HEALTHCHECK --interval=5s --timeout=4s --start-period=120s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ping', timeout=4)" || exit 1
 
 # Command to run the API. --proxy-headers makes request.client the real user's

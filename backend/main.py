@@ -32,12 +32,6 @@ import licensing
 from supabase_rest import json_request as _supabase_json_request
 
 try:
-    from rembg import new_session, remove as rembg_remove
-except ImportError:  # Keep the API bootable until image dependencies are installed.
-    new_session = None
-    rembg_remove = None
-
-try:
     import yt_dlp
     from yt_dlp.utils import DownloadCancelled
     from yt_dlp.networking.common import RequestHandler, Response as YdlResponse
@@ -397,8 +391,13 @@ _background_session = None
 def _remove_background_with_matting(contents: bytes) -> bytes:
     """Create a transparent PNG while preserving the input RGB pixels."""
     global _background_session
-    if new_session is None or rembg_remove is None:
-        raise RuntimeError("rembg is not installed")
+    # Imported on first use, not at startup: rembg pulls in onnxruntime, scipy and
+    # pymatting (numba-compiled on import), which can take tens of seconds and
+    # used to outlast the deploy health check. Only the server-side fallback needs it.
+    try:
+        from rembg import new_session, remove as rembg_remove
+    except ImportError as exc:  # Keep the API bootable without image dependencies.
+        raise RuntimeError("rembg is not installed") from exc
 
     if _background_session is None:
         model_name = os.getenv("BACKGROUND_MODEL", "u2net")
