@@ -9,13 +9,13 @@
 // longer unlocks the local tools; editing this code still can, which is why the
 // offscreen document re-verifies the token on its own (see offscreen.js).
 
+// The only server the extension talks to. Sign-in, profile and rating calls go
+// through its /auth/* and /me/* proxy, so no Supabase URL or key ships here.
 const RIGHTMATE_API_URL = "https://rightmate-api.oddbirds.dev";
-const RM_SUPABASE_URL = "https://yknravxmhhwgwccflefc.supabase.co";
-const RM_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlrbnJhdnhtaGh3Z3djY2ZsZWZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDE1NzksImV4cCI6MjA4NzYxNzU3OX0.8crtZn3ZHqqaCg0VKLuhSzjNv0Kxf9vPolAfCwB_edI";
 
 // Public half of the backend's LICENSE_SIGNING_KEY (raw Ed25519, base64url).
 // Duplicated in offscreen.js on purpose; change both together.
-const RM_LICENSE_PUBLIC_KEY = '9VOPCgJcbADdcZPRXDIiSlu1gNkf667sk4DexsX3C6M';
+const RM_LICENSE_PUBLIC_KEY = 'HYqoBe8rhoaZU9QFXO4TconHY9FPX_fkIuiMVxn_ITw';
 
 const RM_DEVICE_KEY = 'rmDeviceId';
 const RM_LICENSE_KEY = 'rmLicense';
@@ -74,24 +74,38 @@ function rmAccessToken(session) {
     return session.access_token || session.session?.access_token || null;
 }
 
+/**
+ * Calls the backend's auth/account proxy. `path` is e.g. 'auth/token?grant_type=password',
+ * 'auth/signup' or 'me/rating'. /auth/* responses are Supabase's own, passed through.
+ */
+function rmAuthApi(path, body, { method = 'POST', accessToken } = {}) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
+    return fetch(`${RIGHTMATE_API_URL}/${path}`, {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body)
+    });
+}
+
+// Refresh this long before the access token expires. Refreshing on every call
+// would burn Supabase's per-IP token rate limit for nothing.
+const RM_SESSION_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+
 // Returns a session with a fresh access token, or null if the user must sign in.
-async function rmGetSession() {
+async function rmGetSession({ forceRefresh = false } = {}) {
     let { supabaseSession } = await chrome.storage.local.get('supabaseSession');
     if (!supabaseSession?.refresh_token) return supabaseSession || null;
+    const expiresAt = (supabaseSession.expires_at || 0) * 1000;
+    if (!forceRefresh && expiresAt - Date.now() > RM_SESSION_REFRESH_MARGIN_MS) return supabaseSession;
     try {
-        const res = await fetch(`${RM_SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'apikey': RM_SUPABASE_ANON_KEY,
-                'x-client-info': 'anypng-extension'
-            },
-            body: JSON.stringify({ refresh_token: supabaseSession.refresh_token })
-        });
-        if (!res.ok) {
+        const res = await rmAuthApi('auth/token?grant_type=refresh_token', { refresh_token: supabaseSession.refresh_token });
+        if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+            // The refresh token was rejected: the user has to sign in again.
             await chrome.storage.local.remove('supabaseSession');
             return null;
         }
+        if (!res.ok) throw new Error(`Session refresh failed (${res.status})`);
         supabaseSession = { ...supabaseSession, ...(await res.json()) };
         await chrome.storage.local.set({ supabaseSession });
         return supabaseSession;
@@ -205,15 +219,20 @@ async function rmGetLicenseState({ force = false } = {}) {
     const tokenHealthy = payload && payload.exp * 1000 - Date.now() > RM_RENEW_MARGIN_MS;
     if (!force && fresh && tokenHealthy) return cached;
 
-    const session = await rmGetSession();
-    const accessToken = rmAccessToken(session);
+    let accessToken = rmAccessToken(await rmGetSession());
     if (!accessToken) {
         await rmClearLicense();
         return { licensed: false, reason: 'no_session' };
     }
 
     try {
-        const result = await rmLicenseApi('/license/status', accessToken, { device_id: await rmGetDeviceId() });
+        let result = await rmLicenseApi('/license/status', accessToken, { device_id: await rmGetDeviceId() });
+        if (result.status === 401) {
+            // The access token is reused until near expiry, so it may have been
+            // revoked server-side (e.g. a password reset). Refresh once and retry.
+            accessToken = rmAccessToken(await rmGetSession({ forceRefresh: true }));
+            if (accessToken) result = await rmLicenseApi('/license/status', accessToken, { device_id: await rmGetDeviceId() });
+        }
         if (result.status === 401) {
             await rmClearLicense();
             return { licensed: false, reason: 'no_session' };

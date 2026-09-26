@@ -1,47 +1,7 @@
-const SUPABASE_URL = "https://yknravxmhhwgwccflefc.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlrbnJhdnhtaGh3Z3djY2ZsZWZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDE1NzksImV4cCI6MjA4NzYxNzU3OX0.8crtZn3ZHqqaCg0VKLuhSzjNv0Kxf9vPolAfCwB_edI";
-
 let isLoginMode = true;
 
-async function refreshSessionIfNeeded() {
-    const { supabaseSession } = await chrome.storage.local.get('supabaseSession');
-    if (!supabaseSession) return null;
-    
-    if (supabaseSession.refresh_token) {
-        try {
-            const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json', 
-                    'apikey': SUPABASE_ANON_KEY,
-                    'x-client-info': 'anypng-extension'
-                },
-                body: JSON.stringify({ refresh_token: supabaseSession.refresh_token })
-            });
-            
-            if (res.ok) {
-                const newSession = await res.json();
-                const updatedSession = { ...supabaseSession, ...newSession };
-                await chrome.storage.local.set({ supabaseSession: updatedSession });
-                return updatedSession;
-            } else {
-                console.log('Session refresh failed with status:', res.status);
-                const data = await res.json();
-                console.log('Refresh error:', data);
-                await chrome.storage.local.remove('supabaseSession');
-                return null;
-            }
-        } catch (e) {
-            console.log('Session refresh failed:', e);
-            await chrome.storage.local.remove('supabaseSession');
-            return null;
-        }
-    }
-    return supabaseSession;
-}
-
 document.addEventListener('DOMContentLoaded', async () => {
-    const session = await refreshSessionIfNeeded();
+    const session = await rmGetSession();
     if (session) {
         showDashboard(session);
         showLicense();

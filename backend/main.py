@@ -508,6 +508,189 @@ async def license_deactivate(body: LicenseDeviceRequest, user_id: str = Depends(
         raise HTTPException(status_code=503, detail="Deactivation is temporarily unavailable.") from exc
 
 
+# --- Supabase proxy -------------------------------------------------------------
+# The extension talks only to this API, so the Supabase project URL and keys stay
+# on the server. /auth/* passes Supabase's status and JSON through unchanged, so
+# the extension's error handling (data.code, error_description, …) still applies.
+#
+# Supabase rate-limits sign-in, sign-up, verify and token refresh per client IP.
+# Proxied, every user would share this server's IP and its 30–150 requests per
+# 5 minutes. Sending Sb-Forwarded-For fixes that, but Supabase only honours it
+# with a *secret* API key (SUPABASE_SECRET_KEY, sb_secret_…) and once "IP Address
+# Forwarding" is enabled under Authentication → Rate Limits.
+
+SUPABASE_SECRET_KEY = os.getenv("SUPABASE_SECRET_KEY", "")
+AUTH_PROXY_ACTIONS = {"token", "signup", "verify", "resend", "recover"}
+AUTH_TOKEN_GRANTS = {"password", "refresh_token"}
+
+if not SUPABASE_SECRET_KEY:
+    print("[auth] SUPABASE_SECRET_KEY is not set: all users share this server's Supabase auth rate limits")
+
+
+def _client_ip(request: Request) -> str:
+    # Real client address only when uvicorn runs with --proxy-headers behind the
+    # reverse proxy (see Dockerfile); otherwise this is the proxy's own address.
+    return request.client.host if request.client else ""
+
+
+def _supabase_call(method: str, path: str, body: object | None = None, *, apikey: str,
+                   bearer: str | None = None, client_ip: str = "", prefer: str | None = None) -> tuple[int, bytes]:
+    """Raw Supabase request returning (status, body) even for error statuses."""
+    if not SUPABASE_URL or not apikey:
+        raise RuntimeError("Supabase is not configured on the API")
+    headers = {"Content-Type": "application/json", "apikey": apikey}
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
+    if client_ip and apikey == SUPABASE_SECRET_KEY:
+        headers["Sb-Forwarded-For"] = client_ip
+    if prefer:
+        headers["Prefer"] = prefer
+    if path.startswith("/auth/"):
+        # Errors as {code: "email_not_confirmed", message}; the default format has a
+        # numeric `code` that the extension's switch statements never match.
+        headers["X-Supabase-Api-Version"] = "2024-01-01"
+    payload = None if body is None else json.dumps(body).encode("utf-8")
+    request = urllib.request.Request(f"{SUPABASE_URL}{path}", data=payload, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read()
+
+
+async def _auth_forward(request: Request, method: str, path: str, body: object | None,
+                        bearer: str | None = None) -> Response:
+    try:
+        status, content = await asyncio.to_thread(
+            _supabase_call, method, path, body,
+            apikey=SUPABASE_SECRET_KEY or SUPABASE_ANON_KEY, bearer=bearer, client_ip=_client_ip(request),
+        )
+    except (RuntimeError, urllib.error.URLError, TimeoutError) as exc:
+        print(f"[auth] proxy {path} failed: {exc}")
+        raise HTTPException(status_code=503, detail="Sign-in is temporarily unavailable.") from exc
+    return Response(content=content or b"{}", status_code=status, media_type="application/json")
+
+
+def _rest_as_user(method: str, path: str, access_token: str, body: object | None = None,
+                  prefer: str | None = None) -> object:
+    """PostgREST call as the signed-in user, so the table's RLS policies still apply.
+    Deliberately the anon key, never the secret one."""
+    status, content = _supabase_call(method, path, body, apikey=SUPABASE_ANON_KEY,
+                                     bearer=access_token, prefer=prefer)
+    if status >= 400:
+        raise RuntimeError(f"Supabase {method} {path.split('?')[0]} failed ({status}): {content[:300]!r}")
+    return json.loads(content) if content else None
+
+
+async def _json_object(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Expected a JSON object.")
+    return body
+
+
+@app.post("/auth/{action}")
+async def auth_proxy(action: str, request: Request, grant_type: str = ""):
+    """Sign-in (token), sign-up, OTP verify/resend and password recovery."""
+    if action not in AUTH_PROXY_ACTIONS:
+        raise HTTPException(status_code=404, detail="Not found")
+    path = f"/auth/v1/{action}"
+    if action == "token":
+        if grant_type not in AUTH_TOKEN_GRANTS:
+            raise HTTPException(status_code=400, detail="Unsupported grant type.")
+        path += f"?grant_type={grant_type}"
+    return await _auth_forward(request, "POST", path, await _json_object(request))
+
+
+@app.get("/auth/user")
+async def auth_get_user(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
+    return await _auth_forward(request, "GET", "/auth/v1/user", None, bearer=credentials.credentials)
+
+
+@app.put("/auth/user")
+async def auth_update_user(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Password change (after a recovery code) and user metadata. Email changes
+    are not offered by the extension, so they are not forwarded."""
+    body = {k: v for k, v in (await _json_object(request)).items() if k in ("password", "data")}
+    if not body:
+        raise HTTPException(status_code=400, detail="Nothing to update.")
+    return await _auth_forward(request, "PUT", "/auth/v1/user", body, bearer=credentials.credentials)
+
+
+class ProfileUpdateRequest(BaseModel):
+    full_name: str
+
+
+class RatingRequest(BaseModel):
+    rating: int
+    comment: str | None = None
+
+
+@app.get("/me/profile")
+async def me_profile(user_id: str = Depends(verify_signed_in_user),
+                     credentials: HTTPAuthorizationCredentials = Depends(security)):
+    try:
+        rows = await asyncio.to_thread(
+            _rest_as_user, "GET", f"/rest/v1/profiles?id=eq.{user_id}&select=full_name", credentials.credentials)
+    except RuntimeError as exc:
+        print(f"[me] profile read failed: {exc}")
+        raise HTTPException(status_code=503, detail="Could not load your profile.") from exc
+    return {"full_name": rows[0].get("full_name") if rows else None}
+
+
+@app.patch("/me/profile")
+async def me_update_profile(body: ProfileUpdateRequest, request: Request,
+                            user_id: str = Depends(verify_signed_in_user),
+                            credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Updates the profiles row and the auth user's metadata; returns the updated user."""
+    full_name = re.sub(r"\s+", " ", body.full_name).strip()[:100]
+    if not full_name:
+        raise HTTPException(status_code=400, detail="Name cannot be empty.")
+    try:
+        await asyncio.to_thread(
+            _rest_as_user, "PATCH", f"/rest/v1/profiles?id=eq.{user_id}", credentials.credentials,
+            {"full_name": full_name}, "return=minimal")
+    except RuntimeError as exc:
+        print(f"[me] profile update failed: {exc}")
+        raise HTTPException(status_code=503, detail="Could not update your profile.") from exc
+    return await _auth_forward(request, "PUT", "/auth/v1/user", {"data": {"full_name": full_name}},
+                               bearer=credentials.credentials)
+
+
+@app.get("/me/rating")
+async def me_rating(user_id: str = Depends(verify_signed_in_user),
+                    credentials: HTTPAuthorizationCredentials = Depends(security)):
+    try:
+        rows = await asyncio.to_thread(
+            _rest_as_user, "GET", f"/rest/v1/ratings?user_id=eq.{user_id}&select=rating,comment",
+            credentials.credentials)
+    except RuntimeError as exc:
+        print(f"[me] rating read failed: {exc}")
+        raise HTTPException(status_code=503, detail="Could not load your rating.") from exc
+    return rows[0] if rows else None
+
+
+@app.put("/me/rating")
+async def me_save_rating(body: RatingRequest, user_id: str = Depends(verify_signed_in_user),
+                         credentials: HTTPAuthorizationCredentials = Depends(security)):
+    if not 1 <= body.rating <= 5:
+        raise HTTPException(status_code=400, detail="Rating must be between 1 and 5.")
+    row = {"user_id": user_id, "rating": body.rating}
+    if "comment" in body.model_fields_set:   # omitted = keep the stored comment
+        row["comment"] = (body.comment or "")[:2000]
+    try:
+        await asyncio.to_thread(
+            _rest_as_user, "POST", "/rest/v1/ratings?on_conflict=user_id", credentials.credentials,
+            row, "resolution=merge-duplicates,return=minimal")
+    except RuntimeError as exc:
+        print(f"[me] rating save failed: {exc}")
+        raise HTTPException(status_code=503, detail="Could not save your rating.") from exc
+    return {"ok": True}
+
+
 class LicenseKeyRequest(BaseModel):
     key: str
     note: str | None = None

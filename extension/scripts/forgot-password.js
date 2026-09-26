@@ -1,6 +1,3 @@
-const SUPABASE_URL = "https://yknravxmhhwgwccflefc.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlrbnJhdnhtaGh3Z3djY2ZsZWZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDE1NzksImV4cCI6MjA4NzYxNzU3OX0.8crtZn3ZHqqaCg0VKLuhSzjNv0Kxf9vPolAfCwB_edI";
-
 // Matches the "Minimum interval per user" in Supabase's SMTP settings.
 const RESEND_COOLDOWN_SECONDS = 60;
 
@@ -19,14 +16,8 @@ async function loadTheme() {
     }
 }
 
-function authFetch(path, body, { method = 'POST', accessToken } = {}) {
-    const headers = {
-        'Content-Type': 'application/json',
-        'apikey': SUPABASE_ANON_KEY,
-        'x-client-info': 'anypng-extension'
-    };
-    if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
-    return fetch(`${SUPABASE_URL}/auth/v1/${path}`, { method, headers, body: JSON.stringify(body) });
+function authFetch(path, body, options) {
+    return rmAuthApi(`auth/${path}`, body, options);
 }
 
 function apiError(data, status) {

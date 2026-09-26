@@ -1,6 +1,3 @@
-const SUPABASE_URL = "https://yknravxmhhwgwccflefc.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlrbnJhdnhtaGh3Z3djY2ZsZWZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDE1NzksImV4cCI6MjA4NzYxNzU3OX0.8crtZn3ZHqqaCg0VKLuhSzjNv0Kxf9vPolAfCwB_edI";
-
 document.addEventListener('DOMContentLoaded', async () => {
     loadTheme();
 });
@@ -31,15 +28,7 @@ document.getElementById('login-btn').onclick = async () => {
     try {
         const bodyData = { email, password, grant_type: 'password' };
         
-        const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
-            method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json', 
-                'apikey': SUPABASE_ANON_KEY,
-                'x-client-info': 'anypng-extension'
-            },
-            body: JSON.stringify(bodyData)
-        });
+        const res = await rmAuthApi('auth/token?grant_type=password', bodyData);
         
         const data = await res.json();
         
@@ -48,20 +37,12 @@ document.getElementById('login-btn').onclick = async () => {
             
             if (data.code) {
                 switch (data.code) {
-                    case 'invalid_grant':
+                    case 'invalid_credentials':
                         errorMessage = "Invalid email or password";
                         break;
                     case 'email_not_confirmed':
                         // Best effort: the old code may still be valid if this is rate-limited.
-                        await fetch(`${SUPABASE_URL}/auth/v1/resend`, {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'apikey': SUPABASE_ANON_KEY,
-                                'x-client-info': 'anypng-extension'
-                            },
-                            body: JSON.stringify({ type: 'signup', email })
-                        }).catch(() => {});
+                        await rmAuthApi('auth/resend', { type: 'signup', email }).catch(() => {});
                         window.location.href = `signup.html?verify=${encodeURIComponent(email)}`;
                         return;
                 }

@@ -43,9 +43,13 @@ Five files, all copied into the image by the Dockerfile:
 - `admin.html` — the admin panel page (see *Licensing*).
 - `email-logo.png` — served at `GET /brand/logo.png` for the auth emails.
 
-Auth emails are OTP codes, not links: signup and password reset verify through `POST /auth/v1/verify` in `signup.js` / `forgot-password.js`. The Supabase templates live in `backend/email-templates/` and are pasted into the dashboard by hand. They must use `{{ .Token }}` and never `{{ .ConfirmationURL }}`, and their logo comes from the backend rather than Supabase Storage; both rules keep the Supabase project URL out of users' inboxes. SMTP is Hostinger (`noreply@oddbirds.dev`).
+Auth emails are OTP codes, not links: signup and password reset verify through `POST /auth/verify` (the backend proxy, below) in `signup.js` / `forgot-password.js`. The Supabase templates live in `backend/email-templates/` and are pasted into the dashboard by hand. They must use `{{ .Token }}` and never `{{ .ConfirmationURL }}`, and their logo comes from the backend rather than Supabase Storage; both rules keep the Supabase project URL out of users' inboxes. SMTP is Hostinger (`noreply@oddbirds.dev`).
 
 Routes:
+- **Supabase proxy.** The extension never contacts Supabase and ships no Supabase URL or key; everything goes through these routes.
+  - `POST /auth/{token|signup|verify|resend|recover}` (token only with `grant_type=password|refresh_token`), `GET /auth/user` and `PUT /auth/user` (only `password`/`data` are forwarded) pass Supabase's status and JSON straight through. They request `X-Supabase-Api-Version: 2024-01-01`, so errors are `{code: "email_not_confirmed", message}` — the string `code` the pages switch on.
+  - `GET|PATCH /me/profile` and `GET|PUT /me/rating` read and write `profiles`/`ratings` via PostgREST **as the user** (anon key plus the user's JWT, so RLS applies), with the user id taken from the verified token, never the body.
+  - **Rate limits**: Supabase limits auth per client IP, and through the proxy every user would share the server's IP. `_supabase_call` sends `Sb-Forwarded-For` with `SUPABASE_SECRET_KEY` (`sb_secret_…`), which also needs *IP Address Forwarding* enabled under Authentication → Rate Limits. The client IP comes from `--proxy-headers` in the Dockerfile, so port 8000 must only be reachable through the reverse proxy.
 - `GET /ping` — health check; returns `API_FEATURES`.
 - `POST /upscale`, `POST /remove-background` — gated by `verify_licensed_device` (Supabase user JWT **and** the `X-License` entitlement token). There is no static-bearer path: `SECRET_TOKEN` used to ship inside the extension and was therefore public.
 - `POST /license/status|activate|deactivate` — see *Licensing*.
@@ -71,7 +75,7 @@ Auth dependencies, in increasing strictness: `verify_signed_in_user` (valid Supa
 
 Upscaling uses Gemini via `google-genai` (`run_gemini_image_edit`); background removal uses `rembg` (optional import — the app stays bootable without it) and falls back to Gemini. Model choice is restricted to `ALLOWED_AI_MODELS`, but the extension no longer sends a `model` field and `settings.html` has no model dropdown, so `DEFAULT_AI_MODEL` is always what runs.
 
-Required env vars (see `backend/.env.example`): `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `LICENSE_SIGNING_KEY`, and `SECRET_TOKEN` (the admin token — rotate it; the pre-2.4.20 value shipped inside the extension). The service-role key and the secrets must never be shipped in the extension — only the anon key and Supabase user JWTs travel to the client.
+Required env vars (see `backend/.env.example`): `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_SECRET_KEY`, `LICENSE_SIGNING_KEY`, and `SECRET_TOKEN` (the admin token — rotate it; the pre-2.4.20 value shipped inside the extension). The Supabase keys and the secrets must never be shipped in the extension — only Supabase user JWTs travel to the client.
 
 ## Licensing (`backend/licensing.py`, `extension/scripts/license.js`)
 
@@ -110,8 +114,8 @@ Actions:
 
 Manifest V3, no bundler — scripts are plain JS loaded directly by the manifest. Key files:
 - `manifest.json` — permissions, content scripts, CSP, version.
-- `scripts/license.js` — loaded by the service worker via `importScripts` **and** by the pages with a plain `<script>`, so it must stay dependency-free and DOM-free. Owns the backend URL (`RIGHTMATE_API_URL`), the Supabase constants, the session refresh (`rmGetSession`), the per-install device id, the cached entitlement, and `rmGetLicenseState` / `rmIsLicensed` / `rmAuthHeaders` / `rmActivateLicense` / `rmDeactivateLicense`.
-- `scripts/background.js` — the service worker. Owns context-menu creation (`createContextMenus`, plus `refreshLicenseMenus`, which greys the tools out when unlicensed), click handling (`chrome.contextMenus.onClicked`, gated by `ensureLicensed`), the YouTube job registry, and the Google Drive bulk-download queue. Protected calls take their headers from `requireAuthHeaders()`. `SUPABASE_URL`/`SUPABASE_ANON_KEY` are still duplicated as top-level consts in `dashboard.js`, `forgot-password.js`, `login.js`, `signup.js`, `settings.js` — if you rotate the anon key or Supabase project, update `license.js` and every one of those files.
+- `scripts/license.js` — loaded by the service worker via `importScripts` **and** by the pages with a plain `<script>`, so it must stay dependency-free and DOM-free. Owns the backend URL (`RIGHTMATE_API_URL`), `rmAuthApi` (every page's auth/profile/rating call to the proxy), the session refresh (`rmGetSession`, which refreshes only within 5 minutes of expiry), the per-install device id, the cached entitlement, and `rmGetLicenseState` / `rmIsLicensed` / `rmAuthHeaders` / `rmActivateLicense` / `rmDeactivateLicense`.
+- `scripts/background.js` — the service worker. Owns context-menu creation (`createContextMenus`, plus `refreshLicenseMenus`, which greys the tools out when unlicensed), click handling (`chrome.contextMenus.onClicked`, gated by `ensureLicensed`), the YouTube job registry, and the Google Drive bulk-download queue. Protected calls take their headers from `requireAuthHeaders()`.
 - `scripts/content.js` — runs on all pages; shows and hides the glass loading overlay (`SHOW_LOADING` / `HIDE_LOADING`).
 - `scripts/offscreen.js` + `pages/offscreen.html` — an offscreen document (MV3 service workers have no DOM/canvas) handling `convertImage` (canvas + bundled libavif WASM for AVIF) and `removeBackground` (bundled transformers.js/onnxruntime-web models in `scripts/transformers/`).
 - `scripts/drive-downloader.js` — injected only on `drive.google.com`; scans a Drive folder page for media files and hands them to background.js's Drive queue, which refuses when unlicensed.
@@ -124,7 +128,7 @@ Manifest V3, no bundler — scripts are plain JS loaded directly by the manifest
   - `YT_CANCEL`, `YT_LIST_JOBS`, `YT_DISMISS_JOB`, `OPEN_LOGIN` and `OPEN_LICENSE` handle cancelling, restoring jobs after a reload, dismissing finished jobs, and opening the login/license pages.
 - `pages/license.html` + `scripts/license-page.js` — key entry (auto-formatted to `RM-XXXX-XXXX-XXXX-XXXX`), current binding, takeover, deactivate, cooldown message.
 - `pages/popup.html` + `scripts/popup.js` — the router: signed out → `login.html`, unlicensed → `license.html`, otherwise `dashboard.html`. `login.js` and `signup.js` hand off to it after authenticating.
-- `pages/dashboard.html`, `settings.html` (the options page), `login.html`, `signup.html`, `forgot-password.html` — the remaining UI. Each still manages its own Supabase session refresh rather than using `license.js`. Settings persists `upscaleFactor`, `conversionQuality`, `driveDownloadFolder` and `driveDownloadConcurrency` in `chrome.storage.sync`, `theme` in `chrome.storage.local`, and writes star ratings to the Supabase `ratings` table.
+- `pages/dashboard.html`, `settings.html` (the options page), `login.html`, `signup.html`, `forgot-password.html` — the remaining UI. All of them load `license.js` and use `rmAuthApi` / `rmGetSession`. Settings persists `upscaleFactor`, `conversionQuality`, `driveDownloadFolder` and `driveDownloadConcurrency` in `chrome.storage.sync`, `theme` in `chrome.storage.local`, and saves star ratings through `PUT /me/rating`.
 - `inpaint/` — build output of the root Vite project. Nothing in the extension opens it.
 
 ### Context menu → action flow (background.js)

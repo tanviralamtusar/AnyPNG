@@ -9,7 +9,7 @@
 // Public half of the backend's LICENSE_SIGNING_KEY. Deliberately a separate copy
 // from license.js, verified by separate code: patching the license check in the
 // service worker must not be enough to unlock the tools that run here.
-const RM_LICENSE_PUBLIC_KEY = '9VOPCgJcbADdcZPRXDIiSlu1gNkf667sk4DexsX3C6M';
+const RM_LICENSE_PUBLIC_KEY = 'HYqoBe8rhoaZU9QFXO4TconHY9FPX_fkIuiMVxn_ITw';
 
 const fromBase64Url = (value) => {
     const base64 = String(value).replace(/-/g, '+').replace(/_/g, '/');

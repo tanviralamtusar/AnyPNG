@@ -1,7 +1,3 @@
-// 🔒 Supabase Config
-const SUPABASE_URL = "https://yknravxmhhwgwccflefc.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlrbnJhdnhtaGh3Z3djY2ZsZWZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDE1NzksImV4cCI6MjA4NzYxNzU3OX0.8crtZn3ZHqqaCg0VKLuhSzjNv0Kxf9vPolAfCwB_edI";
-
 let userRating = 0;
 
 // Load saved settings when the options page opens
@@ -104,19 +100,14 @@ function getRatingMessage(rating) {
 
 async function loadRating(session) {
     try {
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/ratings?user_id=eq.${session.user.id}&select=rating,comment`, {
-            headers: {
-                'apikey': SUPABASE_ANON_KEY,
-                'Authorization': `Bearer ${session.access_token}`
-            }
-        });
+        const res = await rmAuthApi('me/rating', undefined, { method: 'GET', accessToken: session.access_token });
         if (res.ok) {
             const data = await res.json();
-            if (data && data.length > 0) {
-                userRating = data[0].rating;
+            if (data) {
+                userRating = data.rating;
                 highlightStars(userRating);
-                if (data[0].comment) {
-                    document.getElementById('rating-comment').value = data[0].comment;
+                if (data.comment) {
+                    document.getElementById('rating-comment').value = data.comment;
                 }
                 document.getElementById('feedback-container').classList.remove('hidden');
                 document.getElementById('rating-text').innerText = getRatingMessage(userRating);
@@ -135,22 +126,11 @@ async function saveRating(rating, comment, isExplicit) {
     if (isExplicit) status.innerText = 'Saving...';
 
     try {
-        const payload = { 
-            user_id: supabaseSession.user.id, 
-            rating: rating
-        };
+        // The server takes the user id from the access token, not from the body.
+        const payload = { rating };
         if (comment !== null) payload.comment = comment;
 
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/ratings?on_conflict=user_id`, {
-            method: 'POST',
-            headers: {
-                'apikey': SUPABASE_ANON_KEY,
-                'Authorization': `Bearer ${supabaseSession.access_token}`,
-                'Content-Type': 'application/json',
-                'Prefer': 'resolution=merge-duplicates'
-            },
-            body: JSON.stringify(payload)
-        });
+        const res = await rmAuthApi('me/rating', payload, { method: 'PUT', accessToken: supabaseSession.access_token });
 
         if (res.ok) {
             if (isExplicit) {
@@ -159,8 +139,8 @@ async function saveRating(rating, comment, isExplicit) {
                 setTimeout(() => { status.innerText = ''; }, 3000);
             }
         } else {
-            const err = await res.json();
-            throw new Error(err.message || 'Failed to save');
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to save');
         }
     } catch (e) {
         if (isExplicit) {
@@ -172,7 +152,6 @@ async function saveRating(rating, comment, isExplicit) {
 }
 
 async function loadProfile(session) {
-    const userId = session.user.id;
     const accessToken = session.access_token;
     
     // Default from metadata
@@ -181,18 +160,11 @@ async function loadProfile(session) {
     
     try {
         // Attempt to fetch from profiles table for most up-to-date name
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}&select=full_name`, {
-            method: 'GET',
-            headers: {
-                'apikey': SUPABASE_ANON_KEY,
-                'Authorization': `Bearer ${accessToken}`
-            }
-        });
-        
+        const res = await rmAuthApi('me/profile', undefined, { method: 'GET', accessToken });
         if (res.ok) {
             const data = await res.json();
-            if (data && data.length > 0 && data[0].full_name) {
-                displayName = data[0].full_name;
+            if (data?.full_name) {
+                displayName = data.full_name;
             }
         }
     } catch (e) {
@@ -219,30 +191,11 @@ document.getElementById('updateProfileBtn')?.addEventListener('click', async () 
     btn.disabled = true;
 
     try {
-        // 1. Update Profile Table
-        const profileRes = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${supabaseSession.user.id}`, {
-            method: 'PATCH',
-            headers: {
-                'apikey': SUPABASE_ANON_KEY,
-                'Authorization': `Bearer ${supabaseSession.access_token}`,
-                'Content-Type': 'application/json',
-                'Prefer': 'return=minimal'
-            },
-            body: JSON.stringify({ full_name: newName })
-        });
+        // The server updates both the profiles row and the auth metadata, and
+        // returns the updated user.
+        const authRes = await rmAuthApi('me/profile', { full_name: newName }, { method: 'PATCH', accessToken: supabaseSession.access_token });
 
-        // 2. Update Auth Metadata
-        const authRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-            method: 'PUT',
-            headers: {
-                'apikey': SUPABASE_ANON_KEY,
-                'Authorization': `Bearer ${supabaseSession.access_token}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ data: { full_name: newName } })
-        });
-
-        if (profileRes.ok && authRes.ok) {
+        if (authRes.ok) {
             // Success
             status.innerText = 'Profile updated successfully!';
             status.style.color = 'var(--success)';
