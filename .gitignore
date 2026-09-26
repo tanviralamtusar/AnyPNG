@@ -14,3 +14,7 @@ extension/inpaint/models/*.onnx
 
 # Minified extension build
 dist/
+
+# Extension signing key (decides the extension ID; never commit) and packed builds
+*.pem
+*.crx
