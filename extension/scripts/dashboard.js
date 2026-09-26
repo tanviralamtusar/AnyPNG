@@ -5,6 +5,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (session) {
         showDashboard(session);
         showLicense();
+        showUpdateBanner();
     } else {
         window.location.replace('login.html');
     }
@@ -98,6 +99,38 @@ async function showDashboard(session) {
     
     const profileNameEl = document.getElementById('profile-name');
     if (profileNameEl) profileNameEl.innerText = fullName;
+}
+
+// Sideloaded installs cannot auto-update, so surface the version gap here and
+// point at the download. Hidden entirely when the build is current.
+async function showUpdateBanner() {
+    const banner = document.getElementById('update-banner');
+    if (!banner) return;
+
+    const state = await rmCheckForUpdate().catch(() => null);
+    const message = rmUpdateMessage(state);
+    if (!message) {
+        banner.classList.add('hidden');
+        return;
+    }
+
+    banner.classList.remove('hidden');
+    banner.classList.toggle('is-required', !!state.unsupported);
+    document.getElementById('update-title').innerText = state.unsupported
+        ? 'Update required'
+        : 'Update available';
+    document.getElementById('update-detail').innerText = state.notes
+        ? `${message} ${state.notes}`
+        : message;
+
+    // Without a download URL there is nowhere to send them, so it stays a notice.
+    if (state.downloadUrl) {
+        banner.href = state.downloadUrl;
+        banner.removeAttribute('aria-disabled');
+    } else {
+        banner.removeAttribute('href');
+        banner.setAttribute('aria-disabled', 'true');
+    }
 }
 
 // The license card doubles as the way into the activation page.

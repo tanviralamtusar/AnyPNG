@@ -55,6 +55,15 @@ SECRET_TOKEN = os.getenv("SECRET_TOKEN", "my_super_secret_hostinger_token_123!")
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 ADMIN_SESSION_TTL_SECONDS = int(os.getenv("ADMIN_SESSION_TTL_SECONDS", str(12 * 3600)))
+
+# Sideloaded copies cannot auto-update, so the extension asks the server what the
+# current build is and nags the user. EXTENSION_LATEST_VERSION is what it compares
+# against; EXTENSION_MIN_SUPPORTED, when set, makes older builds fail closed with
+# 426 instead of hitting confusing errors. Leave it empty to only ever nag.
+EXTENSION_LATEST_VERSION = os.getenv("EXTENSION_LATEST_VERSION", "")
+EXTENSION_MIN_SUPPORTED = os.getenv("EXTENSION_MIN_SUPPORTED", "")
+EXTENSION_DOWNLOAD_URL = os.getenv("EXTENSION_DOWNLOAD_URL", "")
+EXTENSION_RELEASE_NOTES = os.getenv("EXTENSION_RELEASE_NOTES", "")
 VERTEX_API_KEY = os.getenv("VERTEX_API_KEY")
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
 GOOGLE_CLOUD_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
@@ -161,6 +170,7 @@ async def verify_signed_in_user(credentials: HTTPAuthorizationCredentials = Depe
 async def verify_licensed_device(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     x_license: str = Header(default="", alias="X-License"),
+    x_ext_version: str = Header(default="", alias="X-Ext-Version"),
 ) -> str:
     """Require a signed-in user whose license is active on the calling device.
 
@@ -168,6 +178,16 @@ async def verify_licensed_device(
     database round-trip; the token's lifetime bounds how long a device that lost
     its binding can keep working.
     """
+    if _version_below(x_ext_version, EXTENSION_MIN_SUPPORTED):
+        raise HTTPException(
+            status_code=426,
+            detail={
+                "error": "update_required",
+                "message": "This version of RightMate is too old. Please update to continue.",
+                "latest": EXTENSION_LATEST_VERSION,
+                "download_url": EXTENSION_DOWNLOAD_URL,
+            },
+        )
     user_id = await _user_id_for_token(credentials.credentials)
     if not user_id:
         raise HTTPException(status_code=401, detail="Please sign in again.")
@@ -417,6 +437,41 @@ def _remove_background_with_matting(contents: bytes) -> bytes:
         output = BytesIO()
         image.convert("RGBA").save(output, format="PNG", optimize=True)
         return output.getvalue()
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    """Dotted version as a comparable tuple. Unparseable parts sort as 0, so a
+    malformed value never accidentally counts as newer than a real one."""
+    parts = []
+    for chunk in str(value or "").split("."):
+        digits = "".join(c for c in chunk if c.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts) or (0,)
+
+
+def _version_below(value: str, floor: str) -> bool:
+    """True when `value` is older than `floor`. An absent floor blocks nothing,
+    and a client that sends no version is never blocked either."""
+    if not floor or not value:
+        return False
+    a, b = _version_tuple(value), _version_tuple(floor)
+    width = max(len(a), len(b))
+    return a + (0,) * (width - len(a)) < b + (0,) * (width - len(b))
+
+
+@app.get("/extension/version")
+async def extension_version():
+    """What the current extension build is, for the in-extension update notifier.
+
+    Public on purpose: it carries no secrets, and an unauthenticated client
+    (one whose session expired) still needs to learn that it is out of date.
+    """
+    return {
+        "latest": EXTENSION_LATEST_VERSION,
+        "min_supported": EXTENSION_MIN_SUPPORTED,
+        "download_url": EXTENSION_DOWNLOAD_URL,
+        "notes": EXTENSION_RELEASE_NOTES,
+    }
 
 
 @app.get("/ping")

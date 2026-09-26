@@ -52,7 +52,8 @@ Routes:
   - `GET|PATCH /me/profile` and `GET|PUT /me/rating` read and write `profiles`/`ratings` via PostgREST **as the user** (anon key plus the user's JWT, so RLS applies), with the user id taken from the verified token, never the body.
   - **Rate limits**: Supabase limits auth per client IP, and through the proxy every user would share the server's IP. `_supabase_call` sends `Sb-Forwarded-For` with `SUPABASE_SECRET_KEY` (`sb_secret_…`), which also needs *IP Address Forwarding* enabled under Authentication → Rate Limits. The client IP comes from `--proxy-headers` in the Dockerfile, so port 8000 must only be reachable through the reverse proxy.
 - `GET /ping` — health check; returns `API_FEATURES`.
-- `POST /upscale`, `POST /remove-background` — gated by `verify_licensed_device` (Supabase user JWT **and** the `X-License` entitlement token). There is no static-bearer path: `SECRET_TOKEN` used to ship inside the extension and was therefore public.
+- `GET /extension/version` — unauthenticated; reports `EXTENSION_LATEST_VERSION`, `EXTENSION_MIN_SUPPORTED`, `EXTENSION_DOWNLOAD_URL` and `EXTENSION_RELEASE_NOTES` for the update notifier. Deliberately public: a client whose session expired still needs to learn it is out of date.
+- `POST /upscale`, `POST /remove-background` — gated by `verify_licensed_device` (Supabase user JWT **and** the `X-License` entitlement token; it also rejects builds below `EXTENSION_MIN_SUPPORTED` with 426 before doing any auth work, using the `X-Ext-Version` header the extension sends). There is no static-bearer path: `SECRET_TOKEN` used to ship inside the extension and was therefore public.
 - `POST /license/status|activate|deactivate` — see *Licensing*.
 - `GET /admin` plus the `/license/admin/*` endpoints — see *Licensing*.
 - `POST /license/webhook/{provider}` — a stub; see *Licensing*.
@@ -117,6 +118,7 @@ Manifest V3, no bundler — scripts are plain JS loaded directly by the manifest
 - `manifest.json` — permissions, content scripts, CSP, version.
 - `scripts/license.js` — loaded by the service worker via `importScripts` **and** by the pages with a plain `<script>`, so it must stay dependency-free and DOM-free. Owns the backend URL (`RIGHTMATE_API_URL`), `rmAuthApi` (every page's auth/profile/rating call to the proxy), the session refresh (`rmGetSession`, which refreshes only within 5 minutes of expiry), the per-install device id, the cached entitlement, and `rmGetLicenseState` / `rmIsLicensed` / `rmAuthHeaders` / `rmActivateLicense` / `rmDeactivateLicense`.
 - `scripts/background.js` — the service worker. Owns context-menu creation (`createContextMenus`, plus `refreshLicenseMenus`, which greys the tools out when unlicensed), click handling (`chrome.contextMenus.onClicked`, gated by `ensureLicensed`), the YouTube job registry, and the Google Drive bulk-download queue. Protected calls take their headers from `requireAuthHeaders()`.
+- `scripts/update.js` — the version check and toolbar badge; see *Update notifier*.
 - `scripts/content.js` — runs on all pages; shows and hides the glass loading overlay (`SHOW_LOADING` / `HIDE_LOADING`).
 - `scripts/offscreen.js` + `pages/offscreen.html` — an offscreen document (MV3 service workers have no DOM/canvas) handling `convertImage` (canvas + bundled libavif WASM for AVIF) and `removeBackground` (bundled transformers.js/onnxruntime-web models in `scripts/transformers/`).
 - `scripts/drive-downloader.js` — injected only on `drive.google.com`; scans a Drive folder page for media files and hands them to background.js's Drive queue, which refuses when unlicensed.
@@ -148,6 +150,17 @@ Several things describe features that no longer exist. Check for callers before 
 - `content.js`: the `GET_IMAGE_AT_POINT` handler has no caller; only the loading overlay is live.
 - `pages/user_profile.html` and `pages/processing_status.html` are orphans — nothing navigates to them, and neither has a matching script.
 - `extension/inpaint/` and the whole `src/` + `tests/` WebGPU demo are unused by the shipped extension. The tests there still pass under `npm run test`.
+
+## Update notifier (`extension/scripts/update.js`)
+
+Chrome only auto-updates extensions it has an `update_url` for, which a "Load unpacked" install never has, and MV3 forbids fetching and running new code. **An extension cannot update itself** — it can only notice it is behind and say so.
+
+- `update.js` is a classic script loaded by the worker via `importScripts('license.js', 'update.js')` and by `dashboard.html` with a `<script>` tag. It reads `RIGHTMATE_API_URL` from license.js, **so license.js must load first**.
+- background.js runs `rmCheckForUpdate()` on worker start, on `chrome.runtime.onStartup`, and from a `chrome.alarms` alarm (`RM_UPDATE_ALARM`) every 6 hours — hence the `alarms` permission. The result is cached in `chrome.storage.local` under `rmUpdate`.
+- The result drives a toolbar badge (blue `!` for available, red for required) and a banner on the dashboard.
+- `requireAuthHeaders()` adds `X-Ext-Version`, so the server can fail closed on ancient builds; `apiErrorMessage()` surfaces the resulting 426 and forces a re-check.
+- Failure modes are all biased toward silence: a failed fetch keeps the last known state, an empty `latest` never reads as "behind", and a cache written by a previous build is discarded rather than trusted.
+- Set `EXTENSION_LATEST_VERSION` on the backend for every release, or the notifier stays quiet. `EXTENSION_MIN_SUPPORTED` is the hard floor and is off by default — setting it above a version people actually run locks them out of every server-backed feature.
 
 ## Extension versioning
 

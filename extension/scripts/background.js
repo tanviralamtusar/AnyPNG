@@ -1,6 +1,7 @@
 // license.js owns the device id, the entitlement cache and the Supabase session
-// refresh, and is also loaded directly by the extension pages.
-importScripts('license.js');
+// refresh; update.js owns the version check. Both are also loaded directly by
+// the extension pages, and update.js reads license.js's API URL, so order matters.
+importScripts('license.js', 'update.js');
 
 // Local (offscreen-canvas) image conversion targets. `download_<key>` is the
 // context-menu id for each; `lossy` decides whether the saved quality setting applies.
@@ -182,6 +183,16 @@ function createContextMenus() {
     });
 }
 chrome.runtime.onInstalled.addListener(createContextMenus);
+
+// Sideloaded installs never auto-update, so the alarm is the only thing that
+// notices a new build. Re-created on every worker start: alarms survive worker
+// restarts, and creating one that already exists just resets its schedule.
+chrome.alarms.create(RM_UPDATE_ALARM, { periodInMinutes: RM_UPDATE_CHECK_MS / 60000 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === RM_UPDATE_ALARM) rmCheckForUpdate({ force: true });
+});
+chrome.runtime.onStartup.addListener(() => rmCheckForUpdate());
+rmCheckForUpdate();
 createContextMenus();
 
 
@@ -497,6 +508,7 @@ async function offscreenLicense() {
 // sending an unauthenticated request that the server would reject anyway.
 async function requireAuthHeaders() {
     const headers = await rmAuthHeaders();
+    if (headers) headers['X-Ext-Version'] = rmCurrentVersion();
     if (!headers) {
         refreshLicenseMenus();
         throw new Error(rmLicenseMessage((await rmGetLicenseState()).reason));
@@ -508,6 +520,10 @@ async function requireAuthHeaders() {
 async function apiErrorMessage(response) {
     let detail = null;
     try { detail = (await response.json())?.detail; } catch { /* non-JSON body */ }
+    if (detail?.error === 'update_required') {
+        rmCheckForUpdate({ force: true });
+        return detail.message;
+    }
     if (detail?.error === 'license') {
         rmGetLicenseState({ force: true }).then(refreshLicenseMenus);
         return detail.message;
@@ -986,6 +1002,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else if (message.action === 'OPEN_LOGIN') {
         chrome.tabs.create({ url: chrome.runtime.getURL('pages/login.html') });
         sendResponse({ ok: true });
+    } else if (message.action === 'CHECK_UPDATE') {
+        rmCheckForUpdate({ force: !!message.force }).then(sendResponse);
+        return true;
     } else if (message.action === 'OPEN_LICENSE') {
         rmOpenLicensePage();
         sendResponse({ ok: true });
