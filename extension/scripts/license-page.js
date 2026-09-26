@@ -66,10 +66,24 @@ function render() {
     setStatus(rmLicenseMessage(state?.reason), false);
 }
 
+async function renderAccount() {
+    const { supabaseSession: session } = await chrome.storage.local.get('supabaseSession');
+    const user = session?.user || session?.session?.user || null;
+    show('account', !!user?.email);
+    if (!user?.email) return;
+
+    const local = user.email.split('@')[0];
+    const name = user.user_metadata?.full_name || local.charAt(0).toUpperCase() + local.slice(1);
+    el('account-name').textContent = name;
+    el('account-email').textContent = user.email;
+    el('account-avatar').textContent = name.charAt(0).toUpperCase();
+}
+
 async function refresh(options) {
     setStatus('Checking your license…', false);
     state = await rmGetLicenseState(options);
     render();
+    await renderAccount();
 }
 
 function showError(message) {
@@ -129,6 +143,15 @@ el('recheck-btn').onclick = async () => {
     await refresh({ force: true });
     chrome.runtime.sendMessage({ action: 'LICENSE_CHANGED' }).catch(() => {});
     el('recheck-btn').disabled = false;
+};
+
+// Signing out keeps the device binding, so signing back in works right away.
+el('signout-btn').onclick = async () => {
+    el('signout-btn').disabled = true;
+    await chrome.storage.local.remove('supabaseSession');
+    await rmClearLicense();
+    chrome.runtime.sendMessage({ action: 'LICENSE_CHANGED' }).catch(() => {});
+    window.location.replace('login.html');
 };
 
 el('signin-btn').onclick = () => {

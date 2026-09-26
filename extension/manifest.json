@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "RightMate",
-  "version": "2.4.26",
+  "version": "2.4.27",
   "homepage_url": "https://oddbirds.dev",
   "description": "Right-click images to convert, upscale, or remove backgrounds and watermarks — powered by self-hosted AI backend.",
   "permissions": [
