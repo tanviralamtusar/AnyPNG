@@ -170,7 +170,7 @@ async def verify_licensed_device(
 ) -> str:
     """Require a signed-in user whose license is active on the calling device.
 
-    The entitlement token is an HMAC issued by /license/status, so this costs no
+    The entitlement token is signed by /license/status (Ed25519), so this costs no
     database round-trip; the token's lifetime bounds how long a device that lost
     its binding can keep working.
     """

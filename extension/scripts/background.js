@@ -94,6 +94,16 @@ function completeDriveDownload(tabId, downloadId, successful) {
 
 async function launchDriveDownload(tabId, job, file, index) {
     try {
+        // Re-checked per file, not only when the queue starts: a long queue can
+        // outlive the entitlement, and this is a second gate besides the start check.
+        if (!await rmTokenUsable(await rmGetLicenseState())) {
+            if (job.stopped) return;   // another slot already ended the queue
+            job.stopped = true;
+            driveDownloadJobs.delete(tabId);
+            notifyDriveQueue(tabId, { state: 'finished', done: job.done, failed: job.files.length - job.done, total: job.files.length });
+            refreshLicenseMenus();
+            return;
+        }
         const url = await resolveDriveDownloadUrl(file);
         if (job.stopped || driveDownloadJobs.get(tabId) !== job) return;
         const downloadId = await chrome.downloads.download({
@@ -398,7 +408,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
                             target: 'offscreen',
                             action: 'removeBackground',
                             data: dataUrl.split(',')[1],
-                            mimeType: imageBlob.type
+                            mimeType: imageBlob.type,
+                            ...await offscreenLicense()
                         }));
                         if (localResult.error) throw new Error(localResult.error);
                         finalBlob = await (await fetch(`data:image/png;base64,${localResult.data}`)).blob();
@@ -460,7 +471,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
                 data: base64Data,
                 mimeType: blob.type,
                 targetType: format.mimeType,
-                quality: format.lossy ? await getConversionQuality() : undefined
+                quality: format.lossy ? await getConversionQuality() : undefined,
+                ...await offscreenLicense()
             }));
 
             if (result.error) throw new Error(result.error);
@@ -473,6 +485,13 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         }
     }
 });
+
+// The offscreen document re-verifies the entitlement itself before running a
+// local tool, so bypassing ensureLicensed() here is not enough on its own. It
+// has no chrome.storage access, hence the token and device id travel along.
+async function offscreenLicense() {
+    return { license: (await rmGetLicenseState()).token || '', deviceId: await rmGetDeviceId() };
+}
 
 // Authorization + X-License for a protected backend call. Throws rather than
 // sending an unauthenticated request that the server would reject anyway.

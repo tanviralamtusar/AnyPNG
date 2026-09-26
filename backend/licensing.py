@@ -5,10 +5,12 @@ Postgres function (`claim_license`, `touch_license`, `release_license`,
 `mint_license`) called with the service-role key, so two devices racing to
 activate the same key resolve to a single winner under a row lock.
 
-Once a device is bound the API hands the extension a short-lived HMAC
+Once a device is bound the API hands the extension a short-lived Ed25519-signed
 entitlement token. Protected endpoints verify that token instead of hitting the
 database on every request; its lifetime is the worst-case delay before a
-revoked or moved license locks a stale device out.
+revoked or moved license locks a stale device out. The extension holds the
+matching public key, so it can verify the token itself before unlocking the
+local-only tools: a hand-edited license cache no longer passes.
 """
 
 import base64
@@ -20,6 +22,9 @@ import re
 import secrets
 import time
 
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 from supabase_rest import SUPABASE_URL, json_request, rpc, service_headers
 
 # Crockford base32 without I, L, O and U: no character pair a user can confuse
@@ -29,6 +34,11 @@ KEY_PREFIX = "RM"
 KEY_GROUPS = 4
 KEY_GROUP_LEN = 4
 
+# Base64url of a raw 32-byte Ed25519 private key. Its public half is pinned in
+# the extension (RM_LICENSE_PUBLIC_KEY in license.js and offscreen.js).
+LICENSE_SIGNING_KEY = os.getenv("LICENSE_SIGNING_KEY", "")
+# Verifies HMAC tokens issued before the switch to Ed25519. Those live at most
+# LICENSE_TOKEN_TTL, so this can be unset one TTL after the new build deploys.
 LICENSE_TOKEN_SECRET = os.getenv("LICENSE_TOKEN_SECRET", "")
 LICENSE_TOKEN_TTL = int(os.getenv("LICENSE_TOKEN_TTL_SECONDS", str(24 * 3600)))
 LICENSE_SWITCH_COOLDOWN_HOURS = int(os.getenv("LICENSE_SWITCH_COOLDOWN_HOURS", "24"))
@@ -74,15 +84,37 @@ def _unwrap(result: object) -> dict:
 
 # --- entitlement tokens -----------------------------------------------------
 
-def _sign(encoded: str) -> str:
-    if not LICENSE_TOKEN_SECRET:
-        raise RuntimeError("LICENSE_TOKEN_SECRET is not configured on the API")
-    signature = hmac.new(LICENSE_TOKEN_SECRET.encode(), encoded.encode(), hashlib.sha256).digest()
-    return base64.urlsafe_b64encode(signature).decode().rstrip("=")
+def _b64encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode().rstrip("=")
 
 
 def _b64decode(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+_signing_key: Ed25519PrivateKey | None = None
+
+
+def _get_signing_key() -> Ed25519PrivateKey:
+    global _signing_key
+    if _signing_key is None:
+        if not LICENSE_SIGNING_KEY:
+            raise RuntimeError("LICENSE_SIGNING_KEY is not configured on the API")
+        _signing_key = Ed25519PrivateKey.from_private_bytes(_b64decode(LICENSE_SIGNING_KEY))
+    return _signing_key
+
+
+def _signature_ok(encoded: str, signature: bytes) -> bool:
+    if len(signature) == 64:
+        try:
+            _get_signing_key().public_key().verify(signature, encoded.encode())
+            return True
+        except InvalidSignature:
+            return False
+    if len(signature) == 32 and LICENSE_TOKEN_SECRET:
+        expected = hmac.new(LICENSE_TOKEN_SECRET.encode(), encoded.encode(), hashlib.sha256).digest()
+        return hmac.compare_digest(expected, signature)
+    return False
 
 
 def device_fingerprint(device_id: str) -> str:
@@ -96,10 +128,8 @@ def make_entitlement_token(user_id: str, device_id: str) -> str:
         "scope": "license",
         "exp": int(time.time()) + LICENSE_TOKEN_TTL,
     }
-    encoded = base64.urlsafe_b64encode(
-        json.dumps(payload, separators=(",", ":")).encode()
-    ).decode().rstrip("=")
-    return f"{encoded}.{_sign(encoded)}"
+    encoded = _b64encode(json.dumps(payload, separators=(",", ":")).encode())
+    return f"{encoded}.{_b64encode(_get_signing_key().sign(encoded.encode()))}"
 
 
 def verify_entitlement_token(token: str, user_id: str) -> dict:
@@ -110,7 +140,7 @@ def verify_entitlement_token(token: str, user_id: str) -> dict:
     """
     try:
         encoded, signature = str(token or "").split(".", 1)
-        if not hmac.compare_digest(_sign(encoded), signature):
+        if not _signature_ok(encoded, _b64decode(signature)):
             raise ValueError("bad signature")
         payload = json.loads(_b64decode(encoded))
     except RuntimeError:

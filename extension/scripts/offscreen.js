@@ -6,13 +6,45 @@
  * chrome.runtime.sendMessage serialization).
  */
 
+// Public half of the backend's LICENSE_SIGNING_KEY. Deliberately a separate copy
+// from license.js, verified by separate code: patching the license check in the
+// service worker must not be enough to unlock the tools that run here.
+const RM_LICENSE_PUBLIC_KEY = '9VOPCgJcbADdcZPRXDIiSlu1gNkf667sk4DexsX3C6M';
+
+const fromBase64Url = (value) => {
+    const base64 = String(value).replace(/-/g, '+').replace(/_/g, '/');
+    return Uint8Array.from(atob(base64 + '='.repeat((4 - base64.length % 4) % 4)), c => c.charCodeAt(0));
+};
+
+let licenseKeyPromise = null;
+
+async function requireEntitlement(token, deviceId) {
+    const [encoded, signature] = String(token || '').split('.');
+    let payload = null;
+    try {
+        licenseKeyPromise ??= crypto.subtle.importKey(
+            'raw', fromBase64Url(RM_LICENSE_PUBLIC_KEY), { name: 'Ed25519' }, false, ['verify']);
+        if (encoded && signature && await crypto.subtle.verify(
+            { name: 'Ed25519' }, await licenseKeyPromise, fromBase64Url(signature), new TextEncoder().encode(encoded))) {
+            payload = JSON.parse(new TextDecoder().decode(fromBase64Url(encoded)));
+        }
+    } catch { /* treated as unlicensed below */ }
+
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(deviceId || ''))));
+    const deviceHash = Array.from(digest, b => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
+    if (payload?.scope !== 'license' || !(payload.exp * 1000 > Date.now()) || payload.dev !== deviceHash) {
+        throw new Error('RightMate needs an active license.');
+    }
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.target !== 'offscreen') {
         return false;
     }
 
     if (message.action === 'convertImage') {
-        handleConversion(message.data, message.mimeType, message.targetType, message.quality)
+        requireEntitlement(message.license, message.deviceId)
+            .then(() => handleConversion(message.data, message.mimeType, message.targetType, message.quality))
             .then((encodedBase64) => {
                 sendResponse({ data: encodedBase64 });
             })
@@ -24,7 +56,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.action === 'removeBackground') {
-        handleBackgroundRemoval(message.data, message.mimeType)
+        requireEntitlement(message.license, message.deviceId)
+            .then(() => handleBackgroundRemoval(message.data, message.mimeType))
             .then((result) => sendResponse(result))
             .catch((error) => {
                 console.error('[Offscreen] Background removal error:', error);

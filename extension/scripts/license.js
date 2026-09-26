@@ -4,13 +4,18 @@
 //
 // The backend owns every licensing decision. This file only: remembers a random
 // per-install device id, caches the signed entitlement token the backend issues,
-// and attaches that token to protected requests. Nothing here is a security
-// boundary — a determined user can edit extension storage — but it is what makes
-// "one account, one active device" hold for normal use.
+// verifies that token's Ed25519 signature before trusting it, and attaches it to
+// protected requests. The signature check means a hand-edited license cache no
+// longer unlocks the local tools; editing this code still can, which is why the
+// offscreen document re-verifies the token on its own (see offscreen.js).
 
 const RIGHTMATE_API_URL = "https://rightmate-api.oddbirds.dev";
 const RM_SUPABASE_URL = "https://yknravxmhhwgwccflefc.supabase.co";
 const RM_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlrbnJhdnhtaGh3Z3djY2ZsZWZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDE1NzksImV4cCI6MjA4NzYxNzU3OX0.8crtZn3ZHqqaCg0VKLuhSzjNv0Kxf9vPolAfCwB_edI";
+
+// Public half of the backend's LICENSE_SIGNING_KEY (raw Ed25519, base64url).
+// Duplicated in offscreen.js on purpose; change both together.
+const RM_LICENSE_PUBLIC_KEY = '9VOPCgJcbADdcZPRXDIiSlu1gNkf667sk4DexsX3C6M';
 
 const RM_DEVICE_KEY = 'rmDeviceId';
 const RM_LICENSE_KEY = 'rmLicense';
@@ -115,8 +120,43 @@ async function rmClearLicense() {
     await chrome.storage.local.remove(RM_LICENSE_KEY);
 }
 
-function rmTokenUsable(state) {
-    return !!(state?.licensed && state.token && state.exp > Date.now());
+function rmBase64UrlBytes(value) {
+    const base64 = String(value).replace(/-/g, '+').replace(/_/g, '/');
+    return Uint8Array.from(atob(base64 + '='.repeat((4 - base64.length % 4) % 4)), c => c.charCodeAt(0));
+}
+
+let rmPublicKeyPromise = null;
+
+/**
+ * The token's payload when its signature, scope, expiry and device binding all
+ * check out, otherwise null. The payload's `dev` is a hash of the device id, so
+ * a token copied from another install fails here without that install's id.
+ */
+async function rmVerifyEntitlement(token) {
+    try {
+        const [encoded, signature] = String(token || '').split('.');
+        if (!encoded || !signature) return null;
+        rmPublicKeyPromise ??= crypto.subtle.importKey(
+            'raw', rmBase64UrlBytes(RM_LICENSE_PUBLIC_KEY), { name: 'Ed25519' }, false, ['verify']);
+        const valid = await crypto.subtle.verify(
+            { name: 'Ed25519' }, await rmPublicKeyPromise,
+            rmBase64UrlBytes(signature), new TextEncoder().encode(encoded));
+        if (!valid) return null;
+
+        const payload = JSON.parse(new TextDecoder().decode(rmBase64UrlBytes(encoded)));
+        if (payload.scope !== 'license' || !(payload.exp * 1000 > Date.now())) return null;
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(await rmGetDeviceId()));
+        const deviceHash = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
+        return payload.dev === deviceHash ? payload : null;
+    } catch (error) {
+        console.warn('[RightMate] Entitlement check failed', error);
+        return null;
+    }
+}
+
+/** True when `state` claims a license and carries a genuine, unexpired token for this device. */
+async function rmTokenUsable(state) {
+    return !!(state?.licensed && await rmVerifyEntitlement(state.token));
 }
 
 function rmStateFromResponse(data) {
@@ -159,8 +199,10 @@ function rmErrorFromResponse(result, fallback) {
  */
 async function rmGetLicenseState({ force = false } = {}) {
     const cached = await rmCachedLicense();
+    // Everything in the cache is user-editable; only the signed token is trusted.
+    const payload = cached?.licensed ? await rmVerifyEntitlement(cached.token) : null;
     const fresh = cached && (Date.now() - (cached.checkedAt || 0)) < RM_RECHECK_MS;
-    const tokenHealthy = rmTokenUsable(cached) && cached.exp - Date.now() > RM_RENEW_MARGIN_MS;
+    const tokenHealthy = payload && payload.exp * 1000 - Date.now() > RM_RENEW_MARGIN_MS;
     if (!force && fresh && tokenHealthy) return cached;
 
     const session = await rmGetSession();
@@ -177,12 +219,19 @@ async function rmGetLicenseState({ force = false } = {}) {
             return { licensed: false, reason: 'no_session' };
         }
         if (!result.ok || !result.data) throw new Error(rmErrorFromResponse(result, 'License check failed.').message);
-        return await rmStoreLicense(rmStateFromResponse(result.data));
+        return await rmStoreLicense(await rmCheckedState(rmStateFromResponse(result.data)));
     } catch (error) {
         console.warn('[RightMate] License check failed', error);
-        if (rmTokenUsable(cached)) return cached;   // offline grace period
+        if (payload) return cached;   // offline grace period
         return { licensed: false, reason: 'offline', license: cached?.license || null };
     }
+}
+
+// A token the pinned public key rejects (e.g. the server's key was rotated
+// without shipping the new public key) must not read as licensed.
+async function rmCheckedState(state) {
+    if (!state.licensed || await rmTokenUsable(state)) return state;
+    return { ...state, licensed: false, reason: 'invalid_token', token: null, exp: 0 };
 }
 
 /** True when this device may use the extension. */
@@ -194,7 +243,7 @@ async function rmIsLicensed(options) {
 /** Headers for a protected backend call, or null when this device is not licensed. */
 async function rmAuthHeaders() {
     const state = await rmGetLicenseState();
-    if (!rmTokenUsable(state)) return null;
+    if (!await rmTokenUsable(state)) return null;
     const accessToken = rmAccessToken(await rmGetSession());
     if (!accessToken) return null;
     return { 'Authorization': `Bearer ${accessToken}`, 'X-License': state.token };
@@ -219,7 +268,8 @@ async function rmActivateLicense(key) {
         const error = rmErrorFromResponse(result, 'That license key could not be activated.');
         return { ok: false, ...error };
     }
-    const state = await rmStoreLicense(rmStateFromResponse(result.data));
+    const state = await rmStoreLicense(await rmCheckedState(rmStateFromResponse(result.data)));
+    if (!state.licensed) return { ok: false, reason: state.reason, message: rmLicenseMessage(state.reason) };
     return { ok: true, state };
 }
 

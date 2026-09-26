@@ -3,6 +3,7 @@ uvicorn[standard]
 python-multipart
 google-genai
 python-dotenv
+cryptography
 Pillow
 rembg
 onnxruntime
